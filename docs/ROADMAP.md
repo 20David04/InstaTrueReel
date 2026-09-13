@@ -315,3 +315,93 @@ TikTok-style overlay patches.
   padding and the nav-bar color write path on the Reels tab (MainActivity).
 - If the top bar sits too close to the status bar icons: 0jS.A15 padding polish.
 - If legibility suffers at 0.2 alpha: consider 0.25-0.3.
+
+---
+
+# Phase 4 — v0.5.0 (FULL-BLEED BOTTOM + MODAL PATH)
+
+## Field test of v0.4.0 (user device, Android 10, 9:16 — log logOfInstaTrueReel.log)
+
+v0.4 CONFIRMED WORKING: zero helper exceptions; 5 clean apply/restore cycles;
+toast on every entry; **top status bar transparent + video under it on both
+MainTabActivity paths (home-feed entry and Reels tab)**. The PhoneWindow log
+proves our re-apply engine wins the nav-bar color war: `setNavigationBarColor: 0`
+lands at exactly +1000/+2500 ms after each apply, defeating Instagram's
+`ff0c1014` re-writes.
+
+Remaining failures (user report + log correlation):
+
+1. **Reels TAB path**: main bottom tab bar opaque; video stops above it.
+2. **FEED path** (Context-Preserving): bottom comment row area opaque.
+3. **WATCH HISTORY / LIKED path**: toast shows but status bar stays BLACK.
+   Log timeline: ModalActivity (`com.instagram.modal.ModalActivity`) launches at
+   14:53:37.894 → apply at 14:53:38.019 → `setNavigationBarColor: ff0c1014`
+   1 ms later. The reels viewer is hosted INSIDE ModalActivity on this path.
+
+## Root causes (ground-truth smali + decoded resources)
+
+1. **Main tab bar = stacking layout, not overlay.** `InstagramMainActivity.A0V`
+   sets `swipeable_tab_view_pager` (0x7f0b3f45) `bottomMargin = tabBarHeight`
+   (dimen attr 0x7f040d30) while the tab bar is visible; the startup lambda
+   `A0h` does the same to `layout_container_main` (0x7f0b2246). The video
+   physically cannot reach the screen bottom until those margins are zero.
+2. **Tab bar color writers** (all opaque): `X/0bQ.A04` (theme/config path) and
+   `X/2ZS.A0A` (reels-open + immersive-drag lerp; also colors the DECOR view
+   and `tab_bar_shadow`). `X/0bI.A0B` sets tab icon colors (lerp to black).
+3. **ModalActivity (Watch History) status bar**: `ModalActivity.A2T()` writes
+   the status-bar color DIRECTLY from the `status_bar_color` intent extra
+   (bypasses our 1fC.A04 interceptor), and sets
+   `layout_container_parent.setFitsSystemWindows(true)` (extra default) —
+   the root is padded below the status bar, so the black window background
+   fills the bar area. On Android 10 (`3sA.A02()` = SDK>=35 = false) the
+   `IgFragmentActivity` case-0 content-padding listener is NOT registered, so
+   fitsSystemWindows is the ONLY padding mechanism — clearing it fixes the path.
+4. **ClipsViewerNavigationBar is the TOP title/search row** (fields:
+   ActionBarTitleViewSwitcher, search edit text 0x7f0b00d7, Carrera camera
+   stub, news-feed button) — the v0.4 "bottom comment bar" analysis was
+   actually about the top row (the patch is harmless/beneficial and kept).
+   The actual bottom comment row is Litho-rendered (`X/XIU.A0i` builds the
+   "Add a comment" row with `clips_viewer_comment_bar_background` = rounded
+   grey stroke pill — NOT the opaque black). The opaque black at the bottom
+   is the window decor behind the video + the container margins from (1).
+
+## v0.5.0 patch set (locally validated: 39/39 checks, patched dexes assemble)
+
+1. All v0.3/v0.4 patches kept (EEr=true; 1fC.A04/1fI.A04 interceptors;
+   9Wz/AFt lifecycle hooks; helper + reapply + toast/logcat; 2Iv.A03 scrim
+   0.2; ClipsViewerNavigationBar null background).
+2. **`2ZS.A0A` lerp gate**: after both `4u9.A02` color lerps, if
+   `TTrueReelHelper.A05` → force v2=v5=0x00000000. Covers tab bar, tablet
+   rail, tab_bar_shadow and the decor recolor on every reels drag/open.
+3. **`0bQ.A04` gate**: while reels active, redirect color resources to
+   `bds_transparent` (0x7f0600a9) — covers theme/config re-applies.
+4. **`0bI.A0B` gate**: while reels active, active icon = white, normal icon =
+   70% white (Integer-boxed) — TikTok-style icons over video.
+5. **Helper `A08(Activity)`**: zeroes bottomMargin of 0x7f0b3f45 and
+   0x7f0b2246 while reels active (saves originals; `A10` restores on exit;
+   re-applied at 100/400/1000/2500/5000 ms — 5th delay added).
+6. **Helper `A09(Activity)`**: ModalActivity path — when
+   `layout_container_parent` (0x7f0b224a) shows insets padding, set
+   `fitsSystemWindows(false)` + zero top/bottom padding; `A10` restores.
+7. **TTrueReelReapply v0.5** carries the Activity reference and re-enforces
+   A06 + A08 + A09 on every tick.
+8. v0.5 strings + diagnostic logcat markers per action ("v0.5 deblock: ...",
+   "v0.5 modal: ...") so the next field log proves exactly what ran.
+
+## Local validation performed (first time fully offline)
+
+- `apply_patches.py v5` run against the full 177k-file base decode: all
+  patches applied, 39/39 verification checks pass.
+- `apktool b` locally assembled every PATCHED dex (classes10/13/15/16/17)
+  cleanly; assembled dexes string-verified (v0.5 markers present, no
+  `Window$LayoutParams` crash signature anywhere).
+
+## Next (Phase 5 candidates — after v0.5 field test)
+
+- If feed-path bottom still shows an opaque strip: inspect the Litho bottom
+  overlay section (`X/2QX` family) for a full-width row background.
+- If tab icons flicker during the exit animation: gate 2ZS.A0B restore path.
+- If ModalActivity still shows one black frame at entry: patch the direct
+  `setStatusBarColor` write in ModalActivity.A2T (line ~241) to 0 while the
+  modal hosts the clips viewer.
+- A2C / tab_bar_height_panorama bottom pad if a gap remains in the tab path.
