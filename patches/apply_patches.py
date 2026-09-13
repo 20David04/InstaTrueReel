@@ -1,59 +1,57 @@
 #!/usr/bin/env python3
 """
-InstaTrueReel — smali patcher (v4, Phase 3 — TIKTOK-STYLE OVERLAYS).
+InstaTrueReel — smali patcher (v5, Phase 4 — FULL-BLEED BOTTOM + MODAL PATH).
 
-State of the world (v0.3 field-tested on Android 10, 9:16):
-  * EEr() forced TRUE works: reel video now draws behind the status bar.
-  * Remaining problems (user report): overlay bars still look OPAQUE and the
-    bottom-most edge is uncertain.
+Field state (v0.4 tested on Android 10, 9:16, user log logOfInstaTrueReel.log):
+  * v0.4 helper runs flawlessly (zero exceptions; apply/restore cycles logged).
+  * TOP is SOLVED on MainTabActivity paths (status bar transparent, video under it).
+  * Our re-apply engine provably wins the nav-bar color war (PhoneWindow logs show
+    setNavigationBarColor: 0 at exactly +1000/+2500 ms after each apply).
+  * REMAINING ISSUES (this release):
+    1. Reels TAB path: main bottom TAB BAR opaque + video stops above it
+       (swipeable_tab_view_pager bottomMargin = tabBarHeight, stacking layout).
+    2. FEED path: bottom comment row area opaque (same margin mechanism on
+       layout_container_main, plus window decor showing below the video).
+    3. WATCH HISTORY / LIKED path (ModalActivity): status bar stays BLACK even
+       though the toast shows. Root cause found in smali: ModalActivity.A2T()
+       sets fitsSystemWindows=true (extra default) on layout_container_parent
+       (0x7f0b224a) -> root padded below status bar -> black window background
+       strip; plus ModalActivity writes statusBarColor DIRECTLY from the
+       "status_bar_color" intent extra (bypasses the 1fC.A04 interceptor).
+       On Android 10 (3sA.A02() = SDK>=35 = false) the IgFragmentActivity
+       case-0 content-padding listener is NOT registered, so the padding is
+       entirely from fitsSystemWindows -> clearing it fixes the path.
 
-Root causes found by deep smali exploration (E-1/E-3 subagents + orchestrator
-verification against the raw opcodes of the exact base decode):
+Patches (all idempotent, fail loudly, marked with `instatruereel:` comments):
 
-  1. TOP overlay opacity is BY DESIGN in native EEr mode: X/2Iv.A03() builds
-     the action-bar background as a black GradientDrawable with **alpha 0.6**
-     (const-wide 0x3fe3333333333333L in A03, EEr==true branch). That scrim is
-     fed into 0jS.A1K (Reels-tab action bar), the legacy ClipsViewerActionBar
-     (feed path, via 2LO.A00) and the GeW re-apply path. 60% black over video
-     reads as nearly opaque. TikTok uses ~20%.
-  2. BOTTOM comment bar (ClipsViewerNavigationBar.A00): whenever ANY of the 5
-     A8e state floats is > 0, the bar paints the drawable
-     clips_viewer_action_bar_gradient_background (0x7f08042b) — a strong black
-     gradient strip across the bottom. The all-zero path already yields
-     setBackground(null) = transparent.
-  3. THE HELPER WAS CRASHING ON-DEVICE (user's logcat, logOfInstaTrueReel.txt):
-     TTrueReelHelper.A00 threw NoSuchMethodError on every Reels entry because the
-     smali referenced Landroid/view/Window$LayoutParams; — a NONEXISTENT framework
-     class. The real type is Landroid/view/WindowManager$LayoutParams;. This
-     explains v0.3's "no toast" + "nav bar still black at the bottom" while the
-     EEr()=true patch (native path) still fixed the top. FIXED in v0.4 (8 sites).
-  4. NOTE (explored, then intentionally NOT patched): the 2Iv.APx A1g==true
-     branch actually sets the bar background to bds_transparent (E-3 initially
-     misread the opcode order; direct reading shows 0bF.A04(ctx)->v5->A03:I
-     while A01(I) receives bds_transparent) — so A1g needs no patch. The
-     9Wz@6135 v99 QE->2IW.A0I consumer turned out to be a TextView text-size
-     tweak — also intentionally skipped. The 9Wz@61725 ModalActivity lOn
-     bottom-pad gate is left server-false ON PURPOSE: enabling it would PAD
-     the root up by the nav-bar inset and BREAK bottom full-bleed.
-
-Patches applied to the decoded smali tree (all idempotent, fail loudly):
-
-  v0.3 (kept):
-    1. X/9Wz.EEr()Z -> FORCED TRUE (native edge-to-edge reels master switch).
-    2. X/TTrueReelHelper + X/TTrueReelReapply installed (window apply/restore,
+  kept from v0.3/v0.4:
+    1. X/9Wz.EEr()Z -> forced true (native edge-to-edge reels master switch).
+    2. TTrueReelHelper + TTrueReelReapply installed (window apply/restore,
        activity-scoped interceptors, per-entry toast + logcat, re-apply engine).
-    3. ClipsViewerFragment (X/9Wz) + ClipsTabFragment (X/AFt) lifecycle hooks.
-    4. X/1fC.A04(Activity,I) status-bar color interceptor (transparent while
-       Reels active — defeats every repaint incl. Choreographer-deferred).
-    5. X/1fI.A04(Activity,I) navigation-bar color interceptor (same pattern).
+    3. ClipsViewerFragment (9Wz) + ClipsTabFragment (AFt) lifecycle hooks.
+    4. X/1fC.A04 status-bar color interceptor; X/1fI.A04 nav-bar interceptor.
+    5. X/2Iv.A03() top scrim alpha 0.6 -> 0.2 (TikTok-style legibility).
+    6. ClipsViewerNavigationBar.A00 :cond_e -> null background (top nav row
+       transparent; the class hosts the title/search row of the viewer).
 
-  v0.4 (NEW — TikTok-style overlays):
-    6. X/2Iv.A03(): top scrim alpha 0.6 -> 0.2 (const-wide
-       0x3fe3333333333333L -> 0x3fc999999999999aL). One edit covers ALL top
-       bars: Reels-tab action bar, feed-path legacy bar, GeW re-apply.
-    7. ClipsViewerNavigationBar.A00(): :cond_e now yields a null background
-       (transparent bottom comment bar, TikTok-style floating row) instead of
-       the 0x7f08042b gradient strip.
+  NEW in v0.5:
+    7. X/2ZS.A0A(...) lerped tab-bar color -> 0x00000000 while reels active.
+       Covers the reels-open recolor, immersive drag lerp, and (same write set)
+       the DECOR view + tab_bar_shadow writes inside A0A.
+    8. X/0bQ.A04(...) config/theme re-apply path: color resources redirected to
+       bds_transparent (0x7f0600a9) while reels active.
+    9. X/0bI.A0B(I, Integer) tab icon colors -> white active / 70% white normal
+       while reels active (icons legible over video, TikTok-style).
+   10. Helper A08/A09/A10 (smali, part of TTrueReelHelper v0.5):
+       A08 zeroes bottomMargin of swipeable_tab_view_pager (0x7f0b3f45) and
+           layout_container_main (0x7f0b2246) while reels active (video extends
+           behind the now-transparent bottom bars); saves originals.
+       A09 clears ModalActivity's root fitsSystemWindows + insets padding
+           (Watch History / Liked path full-bleed fix).
+       A10 restores both on exit; the re-apply engine re-enforces them at
+           100/400/1000/2500/5000 ms (fifth delay added in v0.5).
+   11. Version strings v0.5 + diagnostic logcat markers for every deblock
+       action so the next field log proves exactly what executed.
 """
 import os
 import re
@@ -77,13 +75,14 @@ NAVBAR_CLASS = os.path.join(
     DECODED, "smali_classes10", "instagram", "features", "clips", "viewer",
     "navigationbar", "ClipsViewerNavigationBar.smali",
 )
+TABBAR_THEMER = os.path.join(DECODED, "smali_classes17", "X", "2ZS.smali")
+TABBAR_SETTER = os.path.join(DECODED, "smali_classes13", "X", "0bQ.smali")
+TABBAR_ICON = os.path.join(DECODED, "smali_classes13", "X", "0bI.smali")
 
 APPLY = "invoke-static/range {p0 .. p0}, LX/TTrueReelHelper;->A00(Landroidx/fragment/app/Fragment;)V"
 RESTORE = "invoke-static/range {p0 .. p0}, LX/TTrueReelHelper;->A01(Landroidx/fragment/app/Fragment;)V"
 HIDDEN = "invoke-static {p0, p1}, LX/TTrueReelHelper;->A02(Landroidx/fragment/app/Fragment;Z)V"
 
-# Interceptor injections for X/1fC.A04 and X/1fI.A04 (both .locals 4 with two
-# params -> p0=v4, p1=v5; all < 16 so non-range invoke-static is valid).
 INTERCEPT_STATUS_COLOR = (
     "invoke-static {p0, p1}, LX/TTrueReelHelper;->A03(Landroid/app/Activity;I)I\n"
     "    move-result p1"
@@ -93,7 +92,49 @@ INTERCEPT_NAV_COLOR = (
     "    move-result p1"
 )
 
-# Forced-true replacement body for 9Wz.EEr()Z (native edge-to-edge master switch).
+# ---- patch 7: 2ZS.A0A lerped tab-bar color -> transparent while reels active ----
+TTAB_LERP_OLD_RE = re.compile(
+    r"invoke-static \{p4, p5, p6\}, LX/4u9;->A02\(FII\)I\n\s*\n\s*"
+    r"move-result v2\n\s*\n\s*"
+    r"invoke-static \{p4, p6, p5\}, LX/4u9;->A02\(FII\)I\n\s*\n\s*"
+    r"move-result v5\n"
+)
+TTAB_LERP_NEW = (
+    "invoke-static {p4, p5, p6}, LX/4u9;->A02(FII)I\n\n"
+    "    move-result v2\n\n"
+    "    invoke-static {p4, p6, p5}, LX/4u9;->A02(FII)I\n\n"
+    "    move-result v5\n\n"
+    "    # instatruereel: transparent tab bar + decor while reels active\n"
+    "    sget-boolean v0, LX/TTrueReelHelper;->A05:Z\n"
+    "    if-eqz v0, :itr_ttab_skip\n"
+    "    const/4 v2, 0x0\n"
+    "    const/4 v5, 0x0\n"
+    "    :itr_ttab_skip\n"
+)
+TTAB_MARKER = "instatruereel: transparent tab bar + decor"
+
+# ---- patch 8: 0bQ.A04 config re-apply -> bds_transparent while reels active ----
+TABBAR_CFG_GATE = (
+    "sget-boolean v0, LX/TTrueReelHelper;->A05:Z\n"
+    "    if-eqz v0, :itr_cfg_skip\n"
+    "    # instatruereel: transparent tab bar (config re-apply path)\n"
+    "    const p2, 0x7f0600a9\n"
+    "    const p3, 0x7f0600a9\n"
+    "    :itr_cfg_skip"
+)
+
+# ---- patch 9: 0bI.A0B tab icon colors -> white while reels active ----
+TABBAR_ICON_GATE = (
+    "sget-boolean v0, LX/TTrueReelHelper;->A05:Z\n"
+    "    if-eqz v0, :itr_icon_skip\n"
+    "    # instatruereel: white tab icons over video while reels active\n"
+    "    const/4 p1, -0x1\n"
+    "    const v0, -0x4c000001\n"
+    "    invoke-static {v0}, Ljava/lang/Integer;->valueOf(I)Ljava/lang/Integer;\n"
+    "    move-result-object p2\n"
+    "    :itr_icon_skip"
+)
+
 EER_METHOD_OLD = re.compile(
     r"\.method public final EEr\(\)Z\n"
     r"(?:[^\n]*\n)*?"
@@ -113,8 +154,6 @@ EER_METHOD_NEW = (
 )
 EER_MARKER = "instatruereel: EEr forced true"
 
-# ---- v0.4 patch 6: top scrim alpha 0.6 -> 0.2 in 2Iv.A03() ----
-# The literal is unique in the file (verified against the exact base decode).
 SCRIM_OLD_RE = re.compile(r"const-wide v4, 0x3fe3333333333333L[^\n]*\n")
 SCRIM_NEW = (
     "const-wide v4, 0x3fc999999999999aL    "
@@ -122,8 +161,6 @@ SCRIM_NEW = (
 )
 SCRIM_MARKER = "instatruereel: 0.2 TikTok-style scrim"
 
-# ---- v0.4 patch 7: bottom comment bar always transparent ----
-# :cond_e currently paints drawable 0x7f08042b; we make it produce null.
 NAVBAR_OLD_RE = re.compile(
     r"    :cond_e\n"
     r"    const v0, 0x7f08042b\n"
@@ -136,12 +173,12 @@ NAVBAR_OLD_RE = re.compile(
 )
 NAVBAR_NEW = (
     "    :cond_e\n"
-    "    # instatruereel: bottom comment bar always transparent (TikTok-style)\n"
+    "    # instatruereel: viewer navigation row always transparent\n"
     "    const/4 v0, 0x0\n"
     "\n"
     "    goto/16 :goto_0\n"
 )
-NAVBAR_MARKER = "instatruereel: bottom comment bar always transparent"
+NAVBAR_MARKER = "instatruereel: viewer navigation row always transparent"
 
 ON_HIDDEN_OVERRIDE_2YN = (
     "\n.method public onHiddenChanged(Z)V\n"
@@ -182,9 +219,6 @@ def write(path, content):
 
 
 def inject_after_locals(content, method_pattern, inject_text, label):
-    """Insert inject_text (may be multi-line) right after the `.locals` directive
-    of the first method matching method_pattern. Idempotent via marker.
-    Returns (new_content, ok)."""
     marker = "# instatruereel:" + label
     if marker in content:
         report.append(f"  [skip] {label}: already patched")
@@ -214,7 +248,6 @@ def append_method(content, method_text, marker, label):
 
 
 def replace_method(content, regex, replacement, marker, label, expect=1):
-    """Replace whole method bodies matched by regex. Idempotent via marker."""
     if marker in content:
         report.append(f"  [skip] {label}: already patched")
         return content
@@ -227,7 +260,6 @@ def replace_method(content, regex, replacement, marker, label, expect=1):
 
 
 def replace_unique(content, regex, replacement, marker, label):
-    """Replace exactly ONE occurrence of a regex. Idempotent via marker."""
     if marker in content:
         report.append(f"  [skip] {label}: already patched")
         return content
@@ -244,40 +276,40 @@ def replace_unique(content, regex, replacement, marker, label):
 
 
 def main():
-    # ---------- sanity: targets exist ----------
-    for path in (CLIPS_VIEWER, CLIPS_TAB, WINDOW_CHROME, NAV_CHROME,
-                 REELS_DELEGATE, NAVBAR_CLASS):
+    targets = (
+        CLIPS_VIEWER, CLIPS_TAB, WINDOW_CHROME, NAV_CHROME, REELS_DELEGATE,
+        NAVBAR_CLASS, TABBAR_THEMER, TABBAR_SETTER, TABBAR_ICON,
+    )
+    for path in targets:
         if not os.path.isfile(path):
             errors.append(f"missing target file: {path}")
 
     if errors:
         finish()
 
-    # ---------- 1. install helpers ----------
+    # ---------- 1. install helpers (v0.5) ----------
     os.makedirs(os.path.dirname(HELPER_DST), exist_ok=True)
     if os.path.isfile(HELPER_DST):
         report.append("  [skip] helper TTrueReelHelper already installed")
     else:
         shutil.copyfile(HELPER_SRC, HELPER_DST)
-        report.append("  [ ok ] helper TTrueReelHelper installed -> smali_classes16/X/TTrueReelHelper.smali")
+        report.append("  [ ok ] helper TTrueReelHelper v0.5 installed -> smali_classes16/X/")
 
     if os.path.isfile(REAPPLY_DST):
         report.append("  [skip] helper TTrueReelReapply already installed")
     else:
         shutil.copyfile(REAPPLY_SRC, REAPPLY_DST)
-        report.append("  [ ok ] helper TTrueReelReapply installed -> smali_classes16/X/TTrueReelReapply.smali")
+        report.append("  [ ok ] helper TTrueReelReapply v0.5 installed -> smali_classes16/X/")
 
     # ---------- 2. THE CORE PATCH: force 9Wz.EEr() = true ----------
     report.append("ClipsViewerFragment native edge-to-edge switch (X/9Wz.EEr):")
     src = read(CLIPS_VIEWER)
-
     if ".super LX/2yN;" not in src:
         errors.append("9Wz: unexpected superclass (expected LX/2yN;)")
     if '__redex_internal_original_name:Ljava/lang/String; = "ClipsViewerFragment"' not in src:
         errors.append("9Wz: expected ClipsViewerFragment redex name not found (version drift?)")
     if ".method public final EEr()Z" not in src:
         errors.append("9Wz: EEr()Z method not found (version drift?)")
-
     src = replace_method(src, EER_METHOD_OLD, EER_METHOD_NEW, EER_MARKER, "9Wz.EEr -> forced true")
     write(CLIPS_VIEWER, src)
 
@@ -293,12 +325,10 @@ def main():
     # ---------- 4. ClipsTabFragment (X/AFt) ----------
     report.append("ClipsTabFragment (X/AFt):")
     src = read(CLIPS_TAB)
-
     if ".super LX/2yN;" not in src:
         errors.append("AFt: unexpected superclass (expected LX/2yN;)")
     if '__redex_internal_original_name:Ljava/lang/String; = "ClipsTabFragment"' not in src:
         errors.append("AFt: expected ClipsTabFragment redex name not found (version drift?)")
-
     src, _ = inject_after_locals(src, "onResume()V", APPLY, "AFt.onResume -> apply")
     src, _ = inject_after_locals(src, "onDestroyView()V", RESTORE, "AFt.onDestroyView -> restore")
     src = append_method(src, ON_HIDDEN_OVERRIDE_2YN, "onHiddenChanged(Z)V", "AFt.onHiddenChanged override")
@@ -308,14 +338,10 @@ def main():
     # ---------- 5. status-bar color interceptor (X/1fC.A04) ----------
     report.append("WindowChromeController status bar (X/1fC.A04):")
     src = read(WINDOW_CHROME)
-
     if ".super Ljava/lang/Object;" not in src:
         errors.append("1fC: unexpected superclass (expected Ljava/lang/Object;)")
-
     src, _ = inject_after_locals(
-        src,
-        "A04(Landroid/app/Activity;I)V",
-        INTERCEPT_STATUS_COLOR,
+        src, "A04(Landroid/app/Activity;I)V", INTERCEPT_STATUS_COLOR,
         "1fC.A04 -> transparent-while-reels",
     )
     write(WINDOW_CHROME, src)
@@ -323,41 +349,70 @@ def main():
     # ---------- 6. navigation-bar color interceptor (X/1fI.A04) ----------
     report.append("WindowChromeController navigation bar (X/1fI.A04):")
     src = read(NAV_CHROME)
-
     if ".super Ljava/lang/Object;" not in src:
         errors.append("1fI: unexpected superclass (expected Ljava/lang/Object;)")
-
     src, _ = inject_after_locals(
-        src,
-        "A04(Landroid/app/Activity;I)V",
-        INTERCEPT_NAV_COLOR,
+        src, "A04(Landroid/app/Activity;I)V", INTERCEPT_NAV_COLOR,
         "1fI.A04 -> transparent-while-reels",
     )
     write(NAV_CHROME, src)
 
-    # ---------- 7. v0.4: top scrim alpha 0.6 -> 0.2 (X/2Iv.A03) ----------
+    # ---------- 7. top scrim alpha 0.6 -> 0.2 (X/2Iv.A03) ----------
     report.append("Reels delegate top scrim (X/2Iv.A03):")
     src = read(REELS_DELEGATE)
-
     if ".method private final A03()Landroid/graphics/drawable/Drawable;" not in src:
         errors.append("2Iv: A03() method not found (version drift?)")
     if "EEr()Z" not in src:
         errors.append("2Iv: EEr() call not found (version drift?)")
-
     src = replace_unique(src, SCRIM_OLD_RE, SCRIM_NEW, SCRIM_MARKER, "2Iv.A03 scrim 0.6 -> 0.2")
     write(REELS_DELEGATE, src)
 
-    # ---------- 8. v0.4: bottom comment bar transparent ----------
-    report.append("Bottom comment bar (ClipsViewerNavigationBar.A00):")
+    # ---------- 8. viewer navigation row transparent ----------
+    report.append("Viewer navigation row (ClipsViewerNavigationBar.A00):")
     src = read(NAVBAR_CLASS)
-
     if ".super Landroid/widget/LinearLayout;" not in src:
         errors.append("ClipsViewerNavigationBar: unexpected superclass (expected LinearLayout)")
     if ".method public static final A00(Linstagram/features/clips/viewer/navigationbar/ClipsViewerNavigationBar;LX/A8e;)V" not in src:
         errors.append("ClipsViewerNavigationBar: A00 method not found (version drift?)")
-
     src = replace_unique(src, NAVBAR_OLD_RE, NAVBAR_NEW, NAVBAR_MARKER, "navbar cond_e -> null background")
     write(NAVBAR_CLASS, src)
+
+    # ---------- 9. v0.5: lerped tab-bar color -> transparent (X/2ZS.A0A) ----------
+    report.append("Main tab bar themer (X/2ZS.A0A lerp gate):")
+    src = read(TABBAR_THEMER)
+    if "A0A(Landroid/app/Activity;Landroidx/fragment/app/Fragment;" not in src:
+        errors.append("2ZS: A0A method signature not found (version drift?)")
+    if "0x7f0b3f67" not in src:
+        errors.append("2ZS: tab_bar id 0x7f0b3f67 not found (version drift?)")
+    src = replace_unique(
+        src, TTAB_LERP_OLD_RE, TTAB_LERP_NEW, TTAB_MARKER,
+        "2ZS.A0A lerp -> transparent while reels",
+    )
+    write(TABBAR_THEMER, src)
+
+    # ---------- 10. v0.5: config re-apply path -> bds_transparent (X/0bQ.A04) ----------
+    report.append("Main tab bar setter (X/0bQ.A04 config gate):")
+    src = read(TABBAR_SETTER)
+    if "A04(Landroid/app/Activity;Lcom/instagram/common/session/UserSession;II)V" not in src:
+        errors.append("0bQ: A04 method signature not found (version drift?)")
+    src, _ = inject_after_locals(
+        src, "A04(Landroid/app/Activity;Lcom/instagram/common/session/UserSession;II)V",
+        TABBAR_CFG_GATE, "0bQ.A04 -> transparent-while-reels",
+    )
+    write(TABBAR_SETTER, src)
+
+    # ---------- 11. v0.5: white tab icons over video (X/0bI.A0B) ----------
+    report.append("Main tab bar icons (X/0bI.A0B icon gate):")
+    src = read(TABBAR_ICON)
+    if "A0B(ILjava/lang/Integer;)V" not in src:
+        errors.append("0bI: A0B method signature not found (version drift?)")
+    if "setActiveColor" not in src:
+        errors.append("0bI: setActiveColor not found (version drift?)")
+    src, _ = inject_after_locals(
+        src, "A0B(ILjava/lang/Integer;)V", TABBAR_ICON_GATE,
+        "0bI.A0B -> white-icons-while-reels",
+    )
+    write(TABBAR_ICON, src)
 
     # ---------- verify ----------
     report.append("Verification:")
@@ -379,11 +434,28 @@ def main():
         (HELPER_DST, ".method public static A07(", "helper nav interceptor present"),
         (HELPER_DST, ".method public static A05()V", "helper scheduler present"),
         (HELPER_DST, ".method public static A06(", "helper reapply core present"),
-        (HELPER_DST, 'const-string v1, "InstaTrueReel v0.4: TikTok-style Reels ON"', "toast marker v0.4 present"),
+        (HELPER_DST, ".method public static A08(", "helper v0.5 deblock margins present"),
+        (HELPER_DST, ".method public static A09(", "helper v0.5 modal de-padding present"),
+        (HELPER_DST, ".method public static A10(", "helper v0.5 layout restore present"),
+        (HELPER_DST, "0x7f0b3f45", "helper targets swipeable_tab_view_pager"),
+        (HELPER_DST, "0x7f0b2246", "helper targets layout_container_main"),
+        (HELPER_DST, "0x7f0b224a", "helper targets modal layout_container_parent"),
+        (HELPER_DST, 'const-string v1, "InstaTrueReel v0.5: full-bleed Reels ON"', "toast marker v0.5 present"),
+        (HELPER_DST, "WindowManager$LayoutParams", "helper uses correct WindowManager type"),
         (REAPPLY_DST, ".implements Ljava/lang/Runnable;", "reapply runnable present"),
+        (REAPPLY_DST, "A01:Landroid/app/Activity;", "reapply carries activity ref (v0.5)"),
+        (REAPPLY_DST, "TTrueReelHelper;->A08(Landroid/app/Activity;)V", "reapply calls deblock (v0.5)"),
+        (REAPPLY_DST, "TTrueReelHelper;->A09(Landroid/app/Activity;)V", "reapply calls modal de-pad (v0.5)"),
         (REELS_DELEGATE, SCRIM_MARKER, "2Iv top scrim 0.2 marker present"),
         (REELS_DELEGATE, "0x3fc999999999999aL", "2Iv top scrim 0.2 literal present"),
         (NAVBAR_CLASS, NAVBAR_MARKER, "navbar transparent marker present"),
+        (TABBAR_THEMER, TTAB_MARKER, "2ZS.A0A tab-bar transparent gate present"),
+        (TABBAR_THEMER, ":itr_ttab_skip", "2ZS.A0A gate label present"),
+        (TABBAR_THEMER, "LX/TTrueReelHelper;->A05:Z", "2ZS references helper flag"),
+        (TABBAR_SETTER, "0bQ.A04 -> transparent-while-reels", "0bQ.A04 gate present"),
+        (TABBAR_SETTER, "0x7f0600a9", "0bQ.A04 uses bds_transparent resource"),
+        (TABBAR_ICON, "0bI.A0B -> white-icons-while-reels", "0bI.A0B gate present"),
+        (TABBAR_ICON, "Ljava/lang/Integer;->valueOf(I)Ljava/lang/Integer;", "0bI.A0B boxes normal color"),
     ]
     for path, needle, label in checks:
         if needle in read(path):
@@ -399,11 +471,19 @@ def main():
     else:
         report.append("  [ ok ] navbar opaque gradient const removed")
 
+    # negative check: the Window$LayoutParams crash-bug signature must be absent
+    helper_src = read(HELPER_DST)
+    if "Landroid/view/Window$LayoutParams;" in helper_src:
+        report.append("  [FAIL] helper still references Window$LayoutParams (v0.3 crash bug)")
+        errors.append("verification failed: Window$LayoutParams present in helper")
+    else:
+        report.append("  [ ok ] helper free of Window$LayoutParams crash signature")
+
     finish()
 
 
 def finish():
-    print("InstaTrueReel patch report (v4)")
+    print("InstaTrueReel patch report (v5)")
     print("===============================")
     for line in report:
         print(line)
@@ -416,9 +496,12 @@ def finish():
     print()
     print("All patches applied cleanly.")
     print()
-    print("v0.4 = v0.3 (EEr=true + interceptors + helper) + TikTok-style overlays:")
-    print("  - top action-bar scrim 0.6 -> 0.2 alpha (2Iv.A03)")
-    print("  - bottom comment bar fully transparent (ClipsViewerNavigationBar.A00)")
+    print("v0.5 = v0.4 (EEr=true + helper + interceptors + scrim 0.2 + navbar null)")
+    print("        + transparent main tab bar (2ZS.A0A + 0bQ.A04 + 0bI.A0B icons)")
+    print("        + bottom-layout de-block (helper A08: viewpager + main container")
+    print("          bottomMargin -> 0 while reels active)")
+    print("        + ModalActivity full-bleed (helper A09: fitsSystemWindows off)")
+    print("        + 5th re-apply at 5000 ms + v0.5 diagnostic logcat markers")
 
 
 if __name__ == "__main__":
