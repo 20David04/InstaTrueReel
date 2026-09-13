@@ -1,57 +1,68 @@
 #!/usr/bin/env python3
 """
-InstaTrueReel — smali patcher (v5, Phase 4 — FULL-BLEED BOTTOM + MODAL PATH).
+InstaTrueReel — smali patcher (v6, Phase 5 — CHAIN LIBERATION + FULL DIAGNOSTICS).
 
-Field state (v0.4 tested on Android 10, 9:16, user log logOfInstaTrueReel.log):
-  * v0.4 helper runs flawlessly (zero exceptions; apply/restore cycles logged).
-  * TOP is SOLVED on MainTabActivity paths (status bar transparent, video under it).
-  * Our re-apply engine provably wins the nav-bar color war (PhoneWindow logs show
-    setNavigationBarColor: 0 at exactly +1000/+2500 ms after each apply).
-  * REMAINING ISSUES (this release):
-    1. Reels TAB path: main bottom TAB BAR opaque + video stops above it
-       (swipeable_tab_view_pager bottomMargin = tabBarHeight, stacking layout).
-    2. FEED path: bottom comment row area opaque (same margin mechanism on
-       layout_container_main, plus window decor showing below the video).
-    3. WATCH HISTORY / LIKED path (ModalActivity): status bar stays BLACK even
-       though the toast shows. Root cause found in smali: ModalActivity.A2T()
-       sets fitsSystemWindows=true (extra default) on layout_container_parent
-       (0x7f0b224a) -> root padded below status bar -> black window background
-       strip; plus ModalActivity writes statusBarColor DIRECTLY from the
-       "status_bar_color" intent extra (bypasses the 1fC.A04 interceptor).
-       On Android 10 (3sA.A02() = SDK>=35 = false) the IgFragmentActivity
-       case-0 content-padding listener is NOT registered, so the padding is
-       entirely from fitsSystemWindows -> clearing it fixes the path.
+Field state (v0.5 tested on Android 10, 9:16, user log android_live_log.txt, 16 MB):
+  * v0.5 hooks fire on ALL entry points (Reels tab, home-feed overlay, Watch History
+    modal, Likes modal) — 5 clean apply/restore markers, zero exceptions.
+  * The re-apply engine provably wins the nav-bar color war on every path
+    (setNavigationBarColor: 0 at +100/400/1000/2500/5000 ms).
+  * BUT the two v0.5 runtime fixes were SILENT NO-OPS: "v0.5 deblock:" and
+    "v0.5 modal:" log lines appear ZERO times in the whole 111k-line log —
+    findViewById(0x7f0b224a/0x7f0b2246/0x7f0b3f45) returned null (or preconditions
+    failed) on every one of the 6 evaluations per entry, and the null-guards
+    skipped silently. Consequences:
+      1. FEED path (Context-Preserving Overlay): comment-bar area stays opaque
+         (the containers bounding the video keep their margins; window decor
+         shows below the video).
+      2. WATCH HISTORY / LIKES path (ModalActivity): ModalActivity.A2T() sets
+         fitsSystemWindows=true on the modal root -> content is inset away from
+         the bars -> transparent bars reveal the black window background ->
+         "nothing is transparent".
+  * Watch History / Likes reels run in com.instagram.modal.ModalActivity
+    (separate window; toast + hooks confirmed there by the log).
+
+v0.6 fix — one generic mechanism replaces the fragile hardcoded-ID surgery:
+
+  CHAIN LIBERATION (helper A09/A11/A12): walk from the reels fragment's own
+  view UP the parent chain to the decor. For every ancestor ViewGroup, save
+  (paddingTop, paddingBottom, bottomMargin, fitsSystemWindows) ONCE into a
+  TTrueReelViewSave list, then zero them all while reels is active. Restore
+  everything on exit (A10). This covers the ModalActivity root padding AND
+  the MainTabActivity feed-overlay bounding containers in one pass, without
+  relying on any view id. The walk re-runs on every re-apply tick so late
+  re-blocks by Instagram are re-liberated.
+
+  FULL DIAGNOSTICS: every action logs ("v0.6 liberate: <class> t=.. b=.. mb=..
+  fits=..", "v0.6 deblock eval: pager=.. main=..", "v0.6 liberate: chain freed
+  (n=..)", "v0.6 restore-layout: chain restored (n=..)"), and every catch block
+  logs its exception — v0.5's silent failure mode can never happen again.
 
 Patches (all idempotent, fail loudly, marked with `instatruereel:` comments):
 
-  kept from v0.3/v0.4:
+  kept from v0.3/v0.4/v0.5:
     1. X/9Wz.EEr()Z -> forced true (native edge-to-edge reels master switch).
-    2. TTrueReelHelper + TTrueReelReapply installed (window apply/restore,
-       activity-scoped interceptors, per-entry toast + logcat, re-apply engine).
+    2. TTrueReelHelper + TTrueReelReapply + TTrueReelViewSave installed (window
+       apply/restore, activity-scoped interceptors, per-entry toast + logcat,
+       re-apply engine, v0.6 chain liberation).
     3. ClipsViewerFragment (9Wz) + ClipsTabFragment (AFt) lifecycle hooks.
     4. X/1fC.A04 status-bar color interceptor; X/1fI.A04 nav-bar interceptor.
     5. X/2Iv.A03() top scrim alpha 0.6 -> 0.2 (TikTok-style legibility).
-    6. ClipsViewerNavigationBar.A00 :cond_e -> null background (top nav row
-       transparent; the class hosts the title/search row of the viewer).
+    6. ClipsViewerNavigationBar.A00 :cond_e -> null background.
+    7. X/2ZS.A0A lerped tab-bar color -> 0x00000000 while reels active.
+    8. X/0bQ.A04 config/theme re-apply path -> bds_transparent while active.
+    9. X/0bI.A0B tab icon colors -> white active / 70% white normal while active.
 
-  NEW in v0.5:
-    7. X/2ZS.A0A(...) lerped tab-bar color -> 0x00000000 while reels active.
-       Covers the reels-open recolor, immersive drag lerp, and (same write set)
-       the DECOR view + tab_bar_shadow writes inside A0A.
-    8. X/0bQ.A04(...) config/theme re-apply path: color resources redirected to
-       bds_transparent (0x7f0600a9) while reels active.
-    9. X/0bI.A0B(I, Integer) tab icon colors -> white active / 70% white normal
-       while reels active (icons legible over video, TikTok-style).
-   10. Helper A08/A09/A10 (smali, part of TTrueReelHelper v0.5):
-       A08 zeroes bottomMargin of swipeable_tab_view_pager (0x7f0b3f45) and
-           layout_container_main (0x7f0b2246) while reels active (video extends
-           behind the now-transparent bottom bars); saves originals.
-       A09 clears ModalActivity's root fitsSystemWindows + insets padding
-           (Watch History / Liked path full-bleed fix).
-       A10 restores both on exit; the re-apply engine re-enforces them at
-           100/400/1000/2500/5000 ms (fifth delay added in v0.5).
-   11. Version strings v0.5 + diagnostic logcat markers for every deblock
-       action so the next field log proves exactly what executed.
+  NEW in v0.6:
+   10. Helper A08 rewritten: logs an eval line on EVERY call ("v0.6 deblock
+       eval: pager=m=N|null main=..") before the (kept) margin zeroing, so the
+       next field log proves whether those ids resolve in the running tree.
+   11. Helper A09 rewritten: generic chain-liberation walk (see above).
+   12. Helper A10 extended: restores the liberated chain + re-dispatches
+       insets, then the v0.5 margin restores.
+   13. New class X/TTrueReelViewSave (the per-view saved state holder).
+   14. All catch blocks log; all version strings bumped to v0.6
+       (toast: "InstaTrueReel v0.6: full-bleed everywhere ON").
 """
 import os
 import re
@@ -65,6 +76,8 @@ HELPER_SRC = os.path.join(HERE, "helper_TTrueReelHelper.smali")
 HELPER_DST = os.path.join(DECODED, "smali_classes16", "X", "TTrueReelHelper.smali")
 REAPPLY_SRC = os.path.join(HERE, "helper_TTrueReelReapply.smali")
 REAPPLY_DST = os.path.join(DECODED, "smali_classes16", "X", "TTrueReelReapply.smali")
+VIEWSAVE_SRC = os.path.join(HERE, "helper_TTrueReelViewSave.smali")
+VIEWSAVE_DST = os.path.join(DECODED, "smali_classes16", "X", "TTrueReelViewSave.smali")
 
 CLIPS_VIEWER = os.path.join(DECODED, "smali_classes16", "X", "9Wz.smali")
 CLIPS_TAB = os.path.join(DECODED, "smali_classes16", "X", "AFt.smali")
@@ -287,19 +300,25 @@ def main():
     if errors:
         finish()
 
-    # ---------- 1. install helpers (v0.5) ----------
+    # ---------- 1. install helpers (v0.6) ----------
     os.makedirs(os.path.dirname(HELPER_DST), exist_ok=True)
     if os.path.isfile(HELPER_DST):
         report.append("  [skip] helper TTrueReelHelper already installed")
     else:
         shutil.copyfile(HELPER_SRC, HELPER_DST)
-        report.append("  [ ok ] helper TTrueReelHelper v0.5 installed -> smali_classes16/X/")
+        report.append("  [ ok ] helper TTrueReelHelper v0.6 installed -> smali_classes16/X/")
 
     if os.path.isfile(REAPPLY_DST):
         report.append("  [skip] helper TTrueReelReapply already installed")
     else:
         shutil.copyfile(REAPPLY_SRC, REAPPLY_DST)
-        report.append("  [ ok ] helper TTrueReelReapply v0.5 installed -> smali_classes16/X/")
+        report.append("  [ ok ] helper TTrueReelReapply v0.6 installed -> smali_classes16/X/")
+
+    if os.path.isfile(VIEWSAVE_DST):
+        report.append("  [skip] helper TTrueReelViewSave already installed")
+    else:
+        shutil.copyfile(VIEWSAVE_SRC, VIEWSAVE_DST)
+        report.append("  [ ok ] helper TTrueReelViewSave v0.6 installed -> smali_classes16/X/")
 
     # ---------- 2. THE CORE PATCH: force 9Wz.EEr() = true ----------
     report.append("ClipsViewerFragment native edge-to-edge switch (X/9Wz.EEr):")
@@ -434,18 +453,36 @@ def main():
         (HELPER_DST, ".method public static A07(", "helper nav interceptor present"),
         (HELPER_DST, ".method public static A05()V", "helper scheduler present"),
         (HELPER_DST, ".method public static A06(", "helper reapply core present"),
-        (HELPER_DST, ".method public static A08(", "helper v0.5 deblock margins present"),
-        (HELPER_DST, ".method public static A09(", "helper v0.5 modal de-padding present"),
-        (HELPER_DST, ".method public static A10(", "helper v0.5 layout restore present"),
+        (HELPER_DST, ".method public static A08(", "helper deblock margins present"),
+        (HELPER_DST, ".method public static A09(", "helper v0.6 chain liberation present"),
+        (HELPER_DST, ".method public static A10(", "helper layout restore present"),
+        (HELPER_DST, ".method public static A11(", "helper v0.6 liberate-single-view present"),
+        (HELPER_DST, ".method public static A12(", "helper v0.6 zero-view present"),
+        (HELPER_DST, ".method public static A13(", "helper v0.6 margin reader present"),
+        (HELPER_DST, ".method public static A14(", "helper v0.6 view descriptor present"),
+        (HELPER_DST, "A0F:Landroidx/fragment/app/Fragment;", "helper v0.6 fragment anchor field present"),
+        (HELPER_DST, "A0G:Ljava/util/ArrayList;", "helper v0.6 chain-save list field present"),
+        (HELPER_DST, "LX/TTrueReelViewSave;-><init>(Landroid/view/View;IIIZ)V", "helper v0.6 creates view saves"),
+        (HELPER_DST, "invoke-direct/range {v2 .. v7}", "helper v0.6 range-invoke arity correct"),
         (HELPER_DST, "0x7f0b3f45", "helper targets swipeable_tab_view_pager"),
         (HELPER_DST, "0x7f0b2246", "helper targets layout_container_main"),
-        (HELPER_DST, "0x7f0b224a", "helper targets modal layout_container_parent"),
-        (HELPER_DST, 'const-string v1, "InstaTrueReel v0.5: full-bleed Reels ON"', "toast marker v0.5 present"),
+        (HELPER_DST, 'const-string v1, "InstaTrueReel v0.6: full-bleed everywhere ON"', "toast marker v0.6 present"),
+        (HELPER_DST, 'v0.6 deblock eval: pager=', "v0.6 deblock eval diagnostics present"),
+        (HELPER_DST, 'v0.6 liberate: chain freed (n=', "v0.6 liberation summary log present"),
+        (HELPER_DST, 'v0.6 restore-layout: chain restored (n=', "v0.6 chain-restore log present"),
+        (HELPER_DST, 'v0.6 liberate: exception (recovered)', "v0.6 exceptions are logged, never silent"),
         (HELPER_DST, "WindowManager$LayoutParams", "helper uses correct WindowManager type"),
+        (VIEWSAVE_DST, ".class public LX/TTrueReelViewSave;", "viewsave class present"),
+        (VIEWSAVE_DST, "A00:Landroid/view/View;", "viewsave holds view ref"),
+        (VIEWSAVE_DST, "A01:I", "viewsave holds paddingTop"),
+        (VIEWSAVE_DST, "A02:I", "viewsave holds paddingBottom"),
+        (VIEWSAVE_DST, "A03:I", "viewsave holds bottomMargin"),
+        (VIEWSAVE_DST, "A04:Z", "viewsave holds fitsSystemWindows"),
+        (VIEWSAVE_DST, ".method public constructor <init>(Landroid/view/View;IIIZ)V", "viewsave ctor present"),
         (REAPPLY_DST, ".implements Ljava/lang/Runnable;", "reapply runnable present"),
-        (REAPPLY_DST, "A01:Landroid/app/Activity;", "reapply carries activity ref (v0.5)"),
-        (REAPPLY_DST, "TTrueReelHelper;->A08(Landroid/app/Activity;)V", "reapply calls deblock (v0.5)"),
-        (REAPPLY_DST, "TTrueReelHelper;->A09(Landroid/app/Activity;)V", "reapply calls modal de-pad (v0.5)"),
+        (REAPPLY_DST, "A01:Landroid/app/Activity;", "reapply carries activity ref"),
+        (REAPPLY_DST, "TTrueReelHelper;->A08(Landroid/app/Activity;)V", "reapply calls deblock"),
+        (REAPPLY_DST, "TTrueReelHelper;->A09(Landroid/app/Activity;)V", "reapply calls chain liberation (v0.6)"),
         (REELS_DELEGATE, SCRIM_MARKER, "2Iv top scrim 0.2 marker present"),
         (REELS_DELEGATE, "0x3fc999999999999aL", "2Iv top scrim 0.2 literal present"),
         (NAVBAR_CLASS, NAVBAR_MARKER, "navbar transparent marker present"),
@@ -472,18 +509,18 @@ def main():
         report.append("  [ ok ] navbar opaque gradient const removed")
 
     # negative check: the Window$LayoutParams crash-bug signature must be absent
-    helper_src = read(HELPER_DST)
-    if "Landroid/view/Window$LayoutParams;" in helper_src:
-        report.append("  [FAIL] helper still references Window$LayoutParams (v0.3 crash bug)")
-        errors.append("verification failed: Window$LayoutParams present in helper")
-    else:
-        report.append("  [ ok ] helper free of Window$LayoutParams crash signature")
+    for path in (HELPER_DST, REAPPLY_DST, VIEWSAVE_DST):
+        if "Landroid/view/Window$LayoutParams;" in read(path):
+            report.append(f"  [FAIL] {os.path.basename(path)} still references Window$LayoutParams (v0.3 crash bug)")
+            errors.append(f"verification failed: Window$LayoutParams present in {os.path.basename(path)}")
+        else:
+            report.append(f"  [ ok ] {os.path.basename(path)} free of Window$LayoutParams crash signature")
 
     finish()
 
 
 def finish():
-    print("InstaTrueReel patch report (v5)")
+    print("InstaTrueReel patch report (v6)")
     print("===============================")
     for line in report:
         print(line)
@@ -496,12 +533,17 @@ def finish():
     print()
     print("All patches applied cleanly.")
     print()
-    print("v0.5 = v0.4 (EEr=true + helper + interceptors + scrim 0.2 + navbar null)")
-    print("        + transparent main tab bar (2ZS.A0A + 0bQ.A04 + 0bI.A0B icons)")
-    print("        + bottom-layout de-block (helper A08: viewpager + main container")
-    print("          bottomMargin -> 0 while reels active)")
-    print("        + ModalActivity full-bleed (helper A09: fitsSystemWindows off)")
-    print("        + 5th re-apply at 5000 ms + v0.5 diagnostic logcat markers")
+    print("v0.6 = v0.5 (EEr=true + helper + interceptors + scrim 0.2 + navbar null")
+    print("        + transparent main tab bar 2ZS/0bQ + white icons 0bI)")
+    print("        + CHAIN LIBERATION: generic ancestor walk from the reels fragment")
+    print("          view to the decor — saves + zeroes paddingTop/Bottom, bottomMargin")
+    print("          and fitsSystemWindows of every bounding container while reels is")
+    print("          active (fixes ModalActivity black strip + feed-path opaque bottom")
+    print("          without relying on hardcoded view ids) — restored on exit.")
+    print("        + NEW class X/TTrueReelViewSave (per-view saved state).")
+    print("        + FULL DIAGNOSTICS: 'v0.6 deblock eval', 'v0.6 liberate:' detail")
+    print("          lines, chain freed/restored summaries, and every exception logged.")
+    print("        + re-apply ticks re-run the walk at 100/400/1000/2500/5000 ms.")
 
 
 if __name__ == "__main__":

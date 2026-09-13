@@ -87,3 +87,37 @@ fi
 
 echo "=== Report inventory ==="
 ls -la reports/
+
+echo ""
+echo "=== v0.6 follow-up: ModalActivity + margin writers + overlay hosts ==="
+# Full ModalActivity class dump (A2T writes status bar color from intent extra +
+# sets fitsSystemWindows(true) on layout_container_parent - the modal black strip).
+MODAL=$(find "$DECODED"/smali* -path "*com/instagram/modal/ModalActivity.smali" 2>/dev/null | head -1)
+echo "  ModalActivity: ${MODAL:-NOT FOUND}"
+if [ -n "$MODAL" ]; then
+  cp "$MODAL" reports/ModalActivity.smali
+  echo "  [ModalActivity.smali] $(wc -l < reports/ModalActivity.smali) lines (full class)"
+fi
+ctx "status_bar_color-extra" "status_bar_color" 12
+# The three container ids used by InstagramMainActivity.A0V/A0h + ModalActivity.A2T.
+ctx "id-swipeable-pager-0x7f0b3f45" "0x7f0b3f45" 10
+ctx "id-container-main-0x7f0b2246" "0x7f0b2246" 10
+ctx "id-container-parent-0x7f0b224a" "0x7f0b224a" 10
+# Feed-path overlay host family (Context-Preserving Overlay containers).
+files "family-2QX" "LX/2QX"
+ctx  "family-2QX" "LX/2QX;->" 6
+# Intent extras consumed by ModalActivity (reels-hosting detection for v0.7 gating).
+ctx "intent-getStringExtra-modal" "getStringExtra" 8
+# The lOn/lOz/0Ug inset-padding helpers (modal-path padding writers).
+for cls in "X/lOn.smali" "X/lOz.smali" "X/0Ug.smali" "X/fit.smali"; do
+  found=$(find "$DECODED"/smali* -path "*/$cls" 2>/dev/null | head -1)
+  if [ -n "$found" ]; then
+    cp "$found" "reports/$(basename $cls)"
+    echo "  [$(basename $cls)] dumped ($(wc -l < "$found") lines)"
+  else
+    echo "  $cls -> NOT FOUND"
+  fi
+done
+
+echo "=== Report inventory (final) ==="
+ls -la reports/

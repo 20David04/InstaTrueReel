@@ -33,7 +33,7 @@
     invoke-static {v0}, LX/TTrueReelHelper;->A06(Landroid/view/Window;)V
     :cond_no_window
 
-    # ---- v0.5: re-apply layout de-block + modal de-padding ----
+    # ---- re-apply layout de-block + chain liberation (v0.6) ----
     iget-object v0, p0, LX/TTrueReelReapply;->A01:Landroid/app/Activity;
     if-eqz v0, :cond_done
     invoke-static {v0}, LX/TTrueReelHelper;->A08(Landroid/app/Activity;)V

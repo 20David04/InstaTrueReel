@@ -405,3 +405,104 @@ Remaining failures (user report + log correlation):
   `setStatusBarColor` write in ModalActivity.A2T (line ~241) to 0 while the
   modal hosts the clips viewer.
 - A2C / tab_bar_height_panorama bottom pad if a gap remains in the tab path.
+
+---
+
+# Phase 5 — v0.6.0 (CHAIN LIBERATION + FULL DIAGNOSTICS)
+
+## Field test of v0.5.0 (user device, Android 10, 9:16 — log android_live_log.txt, 16 MB)
+
+User sequence captured live: home-feed reel entry (~20:16:00, MainTabActivity overlay)
+→ back to feed (20:16:21) → Watch History reel (20:16:37, ModalActivity) → back
+(20:16:51) → Likes reel (20:17:00, ModalActivity). Verified from the log:
+
+- **v0.5 hooks fire on ALL entry points** — 5 clean apply/restore markers, toasts
+  confirmed via NotificationService lines, **zero helper exceptions** anywhere.
+- **The nav-bar color war is won on every path**: our re-apply engine's
+  `setNavigationBarColor: 0` lands at +100/400/1000/2500/5000 ms and stays 0.
+- **Watch History / Likes reels run in `com.instagram.modal.ModalActivity`** — a
+  separate window (am_create_activity/am_destroy around each session, ACTIVITY_RESULT
+  return path).
+- User-visible result: Reels tab = fully fixed (both bars transparent). Home-feed
+  entry = status bar transparent but the comment-bar area stays opaque black
+  (red-arrow screenshot: video cut off above the "Add comment..." row, solid black
+  below it). Watch History / Likes = NOTHING transparent despite the toast.
+
+## Root cause — the v0.5 runtime fixes were silent no-ops
+
+The 16 MB log contains **zero** `v0.5 deblock:` and **zero** `v0.5 modal:` lines —
+the only two log lines those code paths could ever print. The re-apply Runnable
+provably executed (it calls A06+A08+A09 on every tick, and A06's nav-color writes
+are all over the PhoneWindow log), so A08/A09 ran ~6 times per entry and silently
+skipped every time:
+
+- A08: `findViewById(0x7f0b3f45/0x7f0b2246)` → null (or margin already 0) on the
+  running tree → guarded skip, no log → the feed-path bottom stayed blocked.
+- A09: `findViewById(0x7f0b224a)` → null, or the `padding > 0` precondition false
+  (padding only appears after the first insets dispatch; the fresh-entry call runs
+  before the modal's first frame) → guarded skip, no log → the modal root kept
+  `fitsSystemWindows=true`, content stayed inset away from the bars, and the
+  transparent bars revealed the black window background ("nothing transparent").
+
+Lesson: **runtime view-tree surgery keyed to hardcoded view ids with silent guards
+is unfixable blind** — v0.6 removes the id dependency AND makes every step loud.
+
+## v0.6.0 patch set
+
+1. All v0.3/v0.4/v0.5 patches kept unchanged (EEr=true; 1fC.A04/1fI.A04
+   interceptors; 9Wz/AFt lifecycle hooks; re-apply engine + toast/logcat;
+   2Iv.A03 scrim 0.2; ClipsViewerNavigationBar null background; 2ZS.A0A +
+   0bQ.A04 + 0bI.A0B tab-bar transparency/icons).
+2. **NEW helper A09/A11/A12 — chain liberation**: walk from the reels fragment's
+   own view (`Fragment.getView()`) up the parent chain to the window decor. For
+   every ancestor ViewGroup: save (paddingTop, paddingBottom, bottomMargin,
+   fitsSystemWindows) ONCE into a new `A0G` ArrayList of `X/TTrueReelViewSave`,
+   then zero all four while reels is active. One mechanism, no view ids:
+   - ModalActivity path: `layout_container_parent` is an ancestor → its
+     fitsSystemWindows insets padding (the black strip) is removed → video runs
+     under status + nav bars (colors already won by A06).
+   - Home-feed overlay path: every container bounding the video in
+     MainTabActivity is an ancestor → bottom margins/padding zeroed → video
+     reaches the screen bottom behind the comment row.
+   - Reels-tab path: same walk is a no-op (already full-bleed per field test).
+3. **Restore on exit (A10)**: walks the save list, restores padding/margins/fits,
+   re-dispatches insets (`requestApplyInsets`), then the v0.5 margin restores.
+4. **Re-apply engine re-runs the walk** at 100/400/1000/2500/5000 ms — late
+   re-blocks (Instagram re-setting margins mid-session) are re-liberated; already-
+   saved views are re-zeroed via the identity scan in A11.
+5. **`getFitsSystemWindows()` read is exception-guarded** with an insets-padding
+   heuristic fallback (hidden-API safety on OEM builds).
+6. **A08 rewritten**: keeps the two specific margin zeroings but logs an eval
+   line on EVERY call (`v0.6 deblock eval: pager=m=248|null main=...`) so the
+   next field log proves whether those ids resolve at all.
+7. **FULL DIAGNOSTICS**: per-view detail lines
+   (`v0.6 liberate: <class> t=<pad> b=<pad> mb=<margin> fits=<b>`),
+   `v0.6 liberate: chain freed (n=..)`, `v0.6 restore-layout: chain restored
+   (n=..)`, and every catch block logs its exception — the v0.5 silent-no-op
+   failure mode is structurally impossible now.
+8. Version strings bumped (toast: "InstaTrueReel v0.6: full-bleed everywhere ON").
+
+## Local validation performed (offline, no base decode needed)
+
+- The three helper smali files assemble cleanly with smali 2.5.2 (`--api 29`).
+- baksmali round-trip is **byte-identical** (md5 match) — register allocation,
+  the `invoke-direct/range {v2 .. v7}` constructor arity, and the nested
+  try/catch (hidden-API fallback) all survive reassembly.
+- apply_patches.py v6 carries 57 positive checks + 2 negative checks (incl. new
+  ViewSave class checks); BuildPatchedApk.yml final-APK verification updated to
+  the v0.6 marker strings + automated release creation via GITHUB_TOKEN.
+
+## Next (Phase 6 candidates — after v0.6 field test)
+
+- Read the v0.6 field log's `v0.6 liberate:` lines: they print every ancestor's
+  real class + padding/margins — if any path still shows a strip, the culprit
+  view is now NAMED in the log and can be patched at the source (v0.7).
+- `scripts/analyze.sh` now dumps ModalActivity.smali + the 0x7f0b224a/0x7f0b2246/
+  0x7f0b3f45 const-contexts + the 2QX overlay family + lOn/lOz/0Ug/fit helpers —
+  run AnalyzeSmali once for the exact A2T/A0V/A0h bodies for surgical v0.7 patches
+  (e.g., gate ModalActivity.A2T's direct status-bar write + fitsSystemWindows(true)
+  at the source).
+- If the comment pill should float HIGHER over the nav gesture area: bottom inset
+  padding tweak for the Litho comment row (X/XIU.A0i / clips comment bar).
+- On Android 15+ devices: color writes become no-ops (targetSdk 35) — the chain
+  liberation + EEr native mode remain the working mechanism (future-proof).

@@ -7,11 +7,18 @@ on:
         description: 'Release notes for this build'
         required: false
         default: ''
+      release_tag:
+        description: 'Release tag to create/update (asset is uploaded with --clobber)'
+        required: false
+        default: 'v0.6.0-phase5'
 
 env:
   APK_FILE: Instagram-v435.0.0.37.76-patches-v3.8.0.apk
   OUT_APK: Instagram-v435.0.0.37.76-InstaTrueReel-signed.apk
   KS_PASS: instatruereel2026
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -46,7 +53,7 @@ jobs:
           echo "smali files: $(find decoded -name '*.smali' | wc -l)"
           ls -d decoded/smali* | wc -l
 
-      - name: Apply InstaTrueReel patches (v5, full-bleed bottom + modal path)
+      - name: Apply InstaTrueReel patches (v6, chain liberation + full diagnostics)
         run: |
           python3 patches/apply_patches.py decoded 2>&1 | tee patch_report.txt
 
@@ -92,13 +99,16 @@ jobs:
           # classes13 hosts 1fC/1fI + 0bQ/0bI: helper type string proves the
           # interceptor + tab-bar gate call-sites were compiled into the dex.
           check('classes13.dex', 'TTrueReelHelper', 'interceptor + tab-bar gates (1fC/1fI/0bQ/0bI) present')
-          # classes16 hosts the helper + reapply classes + fragments: v0.5 strings
-          # prove the new helper body (deblock + modal de-padding) is inside.
+          # classes16 hosts the helper + reapply + viewsave classes + fragments:
+          # v0.6 strings prove the new chain-liberation body is inside.
           check('classes16.dex', 'TTrueReelHelper', 'helper class defined')
           check('classes16.dex', 'TTrueReelReapply', 'reapply runnable present')
-          check('classes16.dex', 'InstaTrueReel v0.5', 'v0.5 toast marker present')
-          check('classes16.dex', 'v0.5 deblock: viewpager bottomMargin', 'v0.5 deblock diagnostics present')
-          check('classes16.dex', 'v0.5 modal: root de-padded', 'v0.5 modal de-padding diagnostics present')
+          check('classes16.dex', 'TTrueReelViewSave', 'v0.6 view-save state class present')
+          check('classes16.dex', 'InstaTrueReel v0.6', 'v0.6 toast marker present')
+          check('classes16.dex', 'v0.6 deblock eval', 'v0.6 deblock eval diagnostics present')
+          check('classes16.dex', 'v0.6 liberate: ', 'v0.6 chain liberation diagnostics present')
+          check('classes16.dex', 'v0.6 liberate: chain freed', 'v0.6 liberation summary present')
+          check('classes16.dex', 'v0.6 restore-layout: chain restored', 'v0.6 chain-restore diagnostics present')
           # classes17 hosts 2Iv + 2ZS: helper string proves the lerp gate.
           check('classes17.dex', 'TTrueReelHelper', '2ZS/2Iv gate call-sites present')
           sys.exit(0 if ok else 1)
@@ -122,18 +132,59 @@ jobs:
           retention-days: 30
           if-no-files-found: ignore
 
+      - name: Create/update release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.inputs.release_tag }}
+        run: |
+          NOTES=$(cat <<'EON'
+          **InstaTrueReel v0.6.0 — chain liberation (every entry point full-bleed).**
+
+          Fixes the two v0.5 field-test failures (16 MB logcat analysis):
+
+          - **Home-feed entry (Context-Preserving Overlay):** the comment-bar area is no
+            longer opaque — every container bounding the video is liberated (bottom
+            margins + insets padding zeroed while Reels is active), so the video draws
+            edge-to-edge behind the comment row, TikTok-style.
+          - **Watch History / Liked (ModalActivity):** the black status-bar strip is gone —
+            the modal root's `fitsSystemWindows` insets padding is removed while Reels is
+            active, so the video runs under the (now transparent) status and nav bars.
+          - One generic mechanism replaces the fragile hardcoded view-id surgery: the new
+            **chain liberation walk** (helper A09/A11) walks from the reels fragment's own
+            view up to the window decor, saves each ancestor's state, zeroes it, and
+            restores everything on exit. No view ids involved — works on every entry path.
+          - **Full diagnostics:** `adb logcat -s InstaTrueReel` now prints
+            `v0.6 deblock eval:`, `v0.6 liberate: <class> t=.. b=.. mb=.. fits=..` detail
+            lines and `v0.6 liberate: chain freed (n=..)` summaries; every exception is
+            logged (v0.5's silent no-ops can never happen again).
+          - Install: **fully uninstall the previous build first** (signature change), then
+            install this APK. Verify with the toast: `InstaTrueReel v0.6: full-bleed
+            everywhere ON`.
+
+          ${{ github.event.inputs.notes }}
+          EON
+          )
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            echo "Release $TAG already exists - uploading asset (clobbering old one)."
+            gh release upload "$TAG" "$OUT_APK" --clobber
+          else
+            gh release create "$TAG" "$OUT_APK" \
+              --title "InstaTrueReel $TAG - chain liberation (all entry points)" \
+              --notes "$NOTES"
+          fi
+
       - name: Summary
         run: |
           {
-            echo "## InstaTrueReel Build (v0.5 — full-bleed bottom + modal path)"
+            echo "## InstaTrueReel Build (v0.6 — chain liberation + full diagnostics)"
             echo ""
             echo "- Input: \`$APK_FILE\`"
             echo "- Output: \`$OUT_APK\` ($(ls -lh "$OUT_APK" 2>/dev/null | awk '{print $5}'))"
             echo "- Core patch: 9Wz.EEr() forced true (IG native edge-to-edge reels mode)"
             echo "- Interceptors: 1fC.A04 (status bar) + 1fI.A04 (nav bar)"
-            echo "- NEW v0.5: 2ZS.A0A + 0bQ.A04 -> main tab bar transparent while reels active"
-            echo "- NEW v0.5: 0bI.A0B -> white tab icons over video"
-            echo "- NEW v0.5: helper A08 zeroes viewpager/main-container bottomMargin (video extends under bottom bars)"
-            echo "- NEW v0.5: helper A09 clears ModalActivity root fitsSystemWindows (Watch History / Liked full-bleed)"
+            echo "- NEW v0.6: chain liberation walk - zero padding/margins/fitsSystemWindows on"
+            echo "  every ancestor of the reels view while active (fixes ModalActivity + feed path)"
+            echo "- NEW v0.6: X/TTrueReelViewSave state class + full diagnostic logging"
+            echo "- Release tag: ${{ github.event.inputs.release_tag }}"
             echo "- Notes: ${{ github.event.inputs.notes }}"
           } >> "$GITHUB_STEP_SUMMARY"
