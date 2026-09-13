@@ -7,6 +7,8 @@
 # instance fields
 .field public A00:Landroid/view/Window;
 
+.field public A01:Landroid/app/Activity;
+
 
 # direct methods
 .method public constructor <init>()V
@@ -25,10 +27,17 @@
     sget-boolean v0, LX/TTrueReelHelper;->A05:Z
     if-eqz v0, :cond_done
 
+    # ---- re-apply window chrome ----
     iget-object v0, p0, LX/TTrueReelReapply;->A00:Landroid/view/Window;
-    if-eqz v0, :cond_done
-
+    if-eqz v0, :cond_no_window
     invoke-static {v0}, LX/TTrueReelHelper;->A06(Landroid/view/Window;)V
+    :cond_no_window
+
+    # ---- v0.5: re-apply layout de-block + modal de-padding ----
+    iget-object v0, p0, LX/TTrueReelReapply;->A01:Landroid/app/Activity;
+    if-eqz v0, :cond_done
+    invoke-static {v0}, LX/TTrueReelHelper;->A08(Landroid/app/Activity;)V
+    invoke-static {v0}, LX/TTrueReelHelper;->A09(Landroid/app/Activity;)V
 
     :cond_done
     :try_end_0
