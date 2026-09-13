@@ -46,7 +46,7 @@ jobs:
           echo "smali files: $(find decoded -name '*.smali' | wc -l)"
           ls -d decoded/smali* | wc -l
 
-      - name: Apply InstaTrueReel patches (v4, TikTok-style overlays)
+      - name: Apply InstaTrueReel patches (v5, full-bleed bottom + modal path)
         run: |
           python3 patches/apply_patches.py decoded 2>&1 | tee patch_report.txt
 
@@ -79,7 +79,7 @@ jobs:
       - name: Verify patches are inside the final APK
         run: |
           mkdir -p finalcheck && cd finalcheck
-          unzip -o "../$OUT_APK" classes13.dex classes16.dex >/dev/null
+          unzip -o "../$OUT_APK" classes13.dex classes16.dex classes17.dex >/dev/null
           python3 - <<'EOF'
           import sys
           ok = True
@@ -89,14 +89,18 @@ jobs:
               found = needle.encode() in data
               print(f"  [{' ok ' if found else 'FAIL'}] {label} ({dex})")
               ok = ok and found
-          # classes13 hosts 1fC/1fI: presence of the helper class name proves the
-          # interceptor call-sites were compiled into the shipped dex.
-          check('classes13.dex', 'TTrueReelHelper', 'interceptor call-sites (1fC/1fI) present')
-          # classes16 hosts the helper + reapply classes + fragments: the toast string
-          # proves the v0.4 helper body was compiled in.
+          # classes13 hosts 1fC/1fI + 0bQ/0bI: helper type string proves the
+          # interceptor + tab-bar gate call-sites were compiled into the dex.
+          check('classes13.dex', 'TTrueReelHelper', 'interceptor + tab-bar gates (1fC/1fI/0bQ/0bI) present')
+          # classes16 hosts the helper + reapply classes + fragments: v0.5 strings
+          # prove the new helper body (deblock + modal de-padding) is inside.
           check('classes16.dex', 'TTrueReelHelper', 'helper class defined')
           check('classes16.dex', 'TTrueReelReapply', 'reapply runnable present')
-          check('classes16.dex', 'InstaTrueReel v0.4', 'v0.4 toast marker present')
+          check('classes16.dex', 'InstaTrueReel v0.5', 'v0.5 toast marker present')
+          check('classes16.dex', 'v0.5 deblock: viewpager bottomMargin', 'v0.5 deblock diagnostics present')
+          check('classes16.dex', 'v0.5 modal: root de-padded', 'v0.5 modal de-padding diagnostics present')
+          # classes17 hosts 2Iv + 2ZS: helper string proves the lerp gate.
+          check('classes17.dex', 'TTrueReelHelper', '2ZS/2Iv gate call-sites present')
           sys.exit(0 if ok else 1)
           EOF
 
@@ -121,13 +125,15 @@ jobs:
       - name: Summary
         run: |
           {
-            echo "## InstaTrueReel Build (v0.4 — TikTok-style overlays)"
+            echo "## InstaTrueReel Build (v0.5 — full-bleed bottom + modal path)"
             echo ""
             echo "- Input: \`$APK_FILE\`"
             echo "- Output: \`$OUT_APK\` ($(ls -lh "$OUT_APK" 2>/dev/null | awk '{print $5}'))"
             echo "- Core patch: 9Wz.EEr() forced true (IG native edge-to-edge reels mode)"
             echo "- Interceptors: 1fC.A04 (status bar) + 1fI.A04 (nav bar)"
-            echo "- NEW v0.4: 2Iv.A03 top scrim alpha 0.6 -> 0.2 (TikTok-style legibility gradient)"
-            echo "- NEW v0.4: ClipsViewerNavigationBar bottom comment bar -> fully transparent"
+            echo "- NEW v0.5: 2ZS.A0A + 0bQ.A04 -> main tab bar transparent while reels active"
+            echo "- NEW v0.5: 0bI.A0B -> white tab icons over video"
+            echo "- NEW v0.5: helper A08 zeroes viewpager/main-container bottomMargin (video extends under bottom bars)"
+            echo "- NEW v0.5: helper A09 clears ModalActivity root fitsSystemWindows (Watch History / Liked full-bleed)"
             echo "- Notes: ${{ github.event.inputs.notes }}"
           } >> "$GITHUB_STEP_SUMMARY"
