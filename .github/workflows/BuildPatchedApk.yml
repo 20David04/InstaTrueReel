@@ -119,7 +119,7 @@ jobs:
           check('classes16.dex', 'v0.8 restore: strip overlay reverted', 'v0.8 overlay-restore present')
           check('classes16.dex', 'GestureManagerFrameLayout', 'v0.8 video-container finder present')
           check('classes16.dex', 'ClipsSwipeRefreshLayout', 'v0.8 fallback finder present')
-          check('classes16.dex', 'v0.8 apply: edge-to-edge engaged', 'v0.8 apply marker present')
+          check('classes16.dex', 'v0.9 apply: edge-to-edge + fullscreen armed', 'v0.9 apply marker present')
           # classes17 hosts 2Iv + 2ZS: helper string proves the lerp gate.
           check('classes17.dex', 'TTrueReelHelper', '2ZS/2Iv gate call-sites present')
           sys.exit(0 if ok else 1)
