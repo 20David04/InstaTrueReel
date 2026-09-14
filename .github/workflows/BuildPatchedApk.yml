@@ -10,7 +10,7 @@ on:
       release_tag:
         description: 'Release tag to create/update (asset is uploaded with --clobber)'
         required: false
-        default: 'v0.9.0-phase8'
+        default: 'v0.9.1-phase8.1'
 
 env:
   APK_FILE: Instagram-v435.0.0.37.76-patches-v3.8.0.apk
@@ -53,7 +53,7 @@ jobs:
           echo "smali files: $(find decoded -name '*.smali' | wc -l)"
           ls -d decoded/smali* | wc -l
 
-      - name: Apply InstaTrueReel patches (v9, TikTok-style horizontal fullscreen)
+      - name: Apply InstaTrueReel patches (v10, rotation-fight fix)
         run: |
           python3 patches/apply_patches.py decoded 2>&1 | tee patch_report.txt
 
@@ -96,18 +96,22 @@ jobs:
               found = needle.encode() in data
               print(f"  [{' ok ' if found else 'FAIL'}] {label} ({dex})")
               ok = ok and found
-          # classes13 hosts 1fC/1fI + 0bQ/0bI: helper type string proves the
-          # interceptor + tab-bar gate call-sites were compiled into the dex.
-          check('classes13.dex', 'TTrueReelHelper', 'interceptor + tab-bar gates (1fC/1fI/0bQ/0bI) present')
+          # classes13 hosts 1fC/1fI + 0bQ/0bI + 6mW: helper type string proves the
+          # interceptor + tab-bar gate + ORIENTATION-LOCK GATE call-sites compiled.
+          check('classes13.dex', 'TTrueReelHelper', 'interceptor + tab-bar + orientation gates (1fC/1fI/0bQ/0bI/6mW) present')
           # classes16 hosts the helper + reapply + viewsave classes + fragments:
           # v0.7 strings prove the gap-closure + telemetry body is inside.
           check('classes16.dex', 'TTrueReelHelper', 'helper class defined')
           check('classes16.dex', 'TTrueReelReapply', 'reapply runnable present')
           check('classes16.dex', 'TTrueReelViewSave', 'v0.6 view-save state class present')
-          check('classes16.dex', 'InstaTrueReel v0.9', 'v0.9 toast marker present')
+          check('classes16.dex', 'InstaTrueReel v0.9.1', 'v0.9.1 toast marker present')
           check('classes16.dex', 'TTrueReelClick', 'v0.9 click listener class present')
           check('classes16.dex', 'TTrueReelRecheck', 'v0.9 recheck listener class present')
           check('classes16.dex', 'v0.9 fs: landscape engaged', 'v0.9 enter-landscape marker present')
+          check('classes16.dex', 'v0.9 fs: portrait-lock blocked', 'v0.9.1 orientation-gate block log present')
+          check('classes16.dex', 'v0.9 restore skipped (fs transient)', 'v0.9.1 transient-rotation guard present')
+          check('classes16.dex', 'v0.9 fs: auto-exit (video no longer landscape)', 'v0.9.1 auto-exit marker present')
+          check('classes16.dex', 'v0.9 hook: restore src=', 'v0.9.1 hook-source logging present')
           check('classes16.dex', 'v0.7 liberate: ', 'v0.7 liberation + height telemetry present')
           check('classes16.dex', 'v0.7 liberate: chain freed', 'v0.7 liberation summary present')
           check('classes16.dex', 'v0.7 close: ', 'v0.7 gap-closure diagnostics present')
@@ -149,28 +153,48 @@ jobs:
           TAG: ${{ github.event.inputs.release_tag }}
         run: |
           NOTES=$(cat <<'EON'
-          **InstaTrueReel v0.9.0 - TikTok-style horizontal fullscreen (phase 8).**
+          **InstaTrueReel v0.9.1 - TikTok-style horizontal fullscreen (phase 8.1:
+          THE ROTATION-FIGHT FIX).**
 
-          New: when a LANDSCAPE video (16:9 etc.) is on screen in any Reels
-          entry point, a TikTok-style "Full screen" pill floats in the
-          letterbox bar under the video. Tap it - the entire app rotates to
-          landscape (sensor-landscape), the comment strip hides, the video
-          fills the screen edge-to-edge, and an "x" exit circle floats
-          top-left. Tap x (or leave Reels) - back to portrait, everything
-          restored.
+          The v0.9 field log explained the flash-and-snap-back: Instagram actively
+          fights the rotation. Its BaseFragmentActivity re-asserts the
+          app-preferred orientation - PORTRAIT on phones - on EVERY configuration
+          change delivery (twice per rotation cycle), all funneled through
+          6mW.A00 ("FixedOrientationCompat"); ModalActivity also locks portrait
+          at launch through the same funnel. The rotation's config change
+          additionally flaps the clips fragment lifecycle (pause -> resume
+          ~112ms later), which fired our restore mid-rotation. Net effect: a
+          half-laid-out landscape flash, then back to portrait.
 
-          Verified in smali before building: InstagramMainActivity +
-          ModalActivity both declare orientation-aware configChanges (rotation
-          = relayout, NO activity recreation); zero setRequestedOrientation
-          call sites in the clips dexes or the host activities - nothing
-          fights the rotation. Detection is event-driven (ViewTreeObserver
-          layout listener), no timers.
+          Three fixes in v0.9.1:
+          1. **Orientation-lock gate**: 6mW.A00 is patched to swallow every
+             app-side orientation set while landscape fullscreen is engaged on
+             the reels activity. Nothing inside Instagram can rotate us back.
+             (Our own exit paths call the activity directly and keep working.)
+          2. **Transient-rotation guard**: the fragment-lifecycle flap caused by
+             the rotation itself (within 1500ms of engaging, same activity, not
+             finishing) no longer tears down the fullscreen state. Real exits
+             (back press / leaving Reels) still fully restore portrait + chrome.
+          3. **Auto-exit (TikTok behavior)**: while landscape, two consecutive
+             non-landscape detections return to portrait automatically - swipe
+             to a portrait reel and fullscreen ends by itself.
+
+          Also new: every restore hook now logs its source ("v0.9 hook: restore
+          src=1..5") so the next field log names exactly WHICH lifecycle event
+          fired, and the gate logs every blocked portrait-lock attempt.
+
+          Expected on-device: tap "Full screen" on a landscape reel -> the app
+          rotates to real landscape and STAYS there; video fills the screen
+          edge-to-edge, comment strip hidden, "x" exit circle top-left; tap x
+          or leave Reels -> portrait restored. Watch History and Likes entries
+          included.
 
           Everything from v0.8 keeps working (status bar + comment bar
-          transparent in all entry points). Install over v0.8 (signature
-          unchanged). Verify with the toast: "InstaTrueReel v0.9: fullscreen
-          ON". Diagnostics: adb logcat -s InstaTrueReel shows "v0.9 fs:"
-          lines (pill created / landscape engaged / back to portrait).
+          transparent in all entry points). Install over v0.9 (signature
+          unchanged). Verify with the toast: "InstaTrueReel v0.9.1: fullscreen
+          ON". Diagnostics: adb logcat -s InstaTrueReel - "v0.9 fs:" lines now
+          include "portrait-lock blocked", "restore skipped (fs transient)",
+          "auto-exit" and "hook: restore src=".
 
           ${{ github.event.inputs.notes }}
           EON
@@ -180,28 +204,30 @@ jobs:
             gh release upload "$TAG" "$OUT_APK" --clobber
           else
             gh release create "$TAG" "$OUT_APK" \
-              --title "InstaTrueReel $TAG - TikTok-style horizontal fullscreen" \
+              --title "InstaTrueReel $TAG - TikTok-style horizontal fullscreen (rotation-fight fix)" \
               --notes "$NOTES"
           fi
 
       - name: Summary
         run: |
           {
-            echo "## InstaTrueReel Build (v0.9 — TikTok-style horizontal fullscreen)"
+            echo "## InstaTrueReel Build (v0.9.1 — rotation-fight fix)"
             echo ""
             echo "- Input: \`$APK_FILE\`"
             echo "- Output: \`$OUT_APK\` ($(ls -lh "$OUT_APK" 2>/dev/null | awk '{print $5}'))"
             echo "- Core patch: 9Wz.EEr() forced true (IG native edge-to-edge reels mode)"
             echo "- Interceptors: 1fC.A04 (status bar) + 1fI.A04 (nav bar)"
             echo "- v0.6 kept: chain liberation walk (STATUS BAR FIXED everywhere)"
-            echo "- v0.7 kept: bottom-gap closure A15/A16 (exact-height surgery, top-down,"
-            echo "  cascading via re-apply ticks) + h=/ph= height telemetry"
-            echo "- v0.7 kept: A17/A18 one-shot bottom-strip tree dump (culprit naming)"
-            echo "- NEW v0.8: strip overlay A19/A1A/A1B/A1C/A1D/A1E (video full-height"
-            echo "  + weight=0; comment strip -> floating transparent overlay; pill kept)"
-            echo "- NEW v0.9: TikTok-style horizontal fullscreen A20-A27 + TTrueReelClick"
-            echo "  + TTrueReelRecheck (pill under landscape videos, sensor-landscape"
-            echo "  rotation without recreation, strip hide, x exit button)"
+            echo "- v0.7 kept: bottom-gap closure A15/A16 + h=/ph= telemetry"
+            echo "- v0.8 kept: strip overlay A19/A1A/A1B/A1C/A1D/A1E (comment-bar fix)"
+            echo "- v0.9 kept: TikTok-style horizontal fullscreen A20-A27 + pill +"
+            echo "  sensor-landscape rotation + x exit button"
+            echo "- NEW v0.9.1: 6mW.A00 FixedOrientationCompat GATE (helper A28) -"
+            echo "  Instagram's reactive portrait-lock (A1p -> 0XU -> 0XX -> 6mW on"
+            echo "  every config change) is swallowed while fullscreen is engaged;"
+            echo "  A01 transient-rotation guard (1500ms window, isFinishing-aware);"
+            echo "  auto-exit on non-landscape video (2-detection debounce);"
+            echo "  hook-source logging A2B..A2F (which lifecycle event restored)"
             echo "- Release tag: ${{ github.event.inputs.release_tag }}"
             echo "- Notes: ${{ github.event.inputs.notes }}"
           } >> "$GITHUB_STEP_SUMMARY"

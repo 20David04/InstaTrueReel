@@ -654,28 +654,12 @@ Open items for v0.9 (if needed): if Watch History / Likes show
 LinearLayout" in logcat, capture `adb logcat -s InstaTrueReel` — the
 v0.8 lines will name the exact divergence of the ModalActivity tree.
 
-## Phase 8 — v0.9.0-phase8: TikTok-style horizontal fullscreen (SHIPPED)
+## Phase 8 — v0.9.0-phase8: TikTok-style horizontal fullscreen (SHIPPED, broken)
 
 **Goal:** TikTok's "Full screen" experience for landscape (16:9-ish) reels: a
 "Full screen" pill floats in the letterbox bar under a landscape video; tapping
 it rotates the whole app to landscape (TikTok rotates the entire app + swaps
 the player UI); tapping the "x" exit circle returns to portrait.
-
-**Research findings (2026-09-14, sandbox smali analysis of the base APK):**
-- InstagramMainActivity (MainTabActivity target): screenOrientation=14 (LOCKED),
-  configChanges=0xDA0 -> orientation|screenSize|screenLayout|smallestScreenSize
-  all present -> rotation relayouts WITHOUT activity recreation.
-- ModalActivity (Watch History / Likes host): screenOrientation="3" (BEHIND),
-  configChanges=0xDB0 -> same: no recreation on rotation.
-- Full-app sweep of all 21 dexes: only 11 classes ever call
-  setRequestedOrientation (cloud-gaming controllers, signed-out/bloks/order
-  activities) - ZERO in the clips dexes (classes16/classes17) and ZERO in
-  InstagramMainActivity/ModalActivity -> nothing fights our rotation.
-- 9Wz (ClipsViewerFragment) has a real onConfigurationChanged handler that
-  re-reads screen dims (built for tablets) - safe under rotation.
-- TikTok reference (user screenshots): pill = "Full screen" 60% black rounded,
-  sits in the letterbox bar under the video; landscape player = edge-to-edge
-  video, top info bar, center play/pause, bottom scrubber + actions.
 
 **Implementation (v0.9):** A20-A27 + fs* fields + TTrueReelClick +
 TTrueReelRecheck. Detection: largest TextureView under the fragment view,
@@ -684,11 +668,126 @@ Enter: setRequestedOrientation(SENSOR_LANDSCAPE=6) + strip GONE (video gets
 the full height via the v0.8 reassert engine re-run) + exit circle top-left.
 Exit / reels-exit: PORTRAIT(1) + strip VISIBLE + full cleanup (A27).
 
-**Lag watch (user reports slight lag):** the reapply engine is bounded (5
-ticks per entry, 100-5000ms) - not periodic; v0.9 adds only event-driven
-layout checks. Suspected cause: 4K feed software decode. If lag persists, a
-future phase can make the reapply engine single-shot after settle.
+**Field test result (2026-09-14 log.txt + 2 screenshots):** pill appears and
+is correctly placed (VLM-verified TikTok-style under the letterboxed video);
+tap -> the app DID rotate to landscape (ROTATION_90, config 1920x1080
+delivered) but snapped back to portrait ~0.7s later with a mangled layout
+(video squished left, huge black bar right; engine re-applied landscape dims
+into the re-portraited screen).
 
-**Phase 9 candidates:** dedicated landscape player UI (scrubber, timestamps,
-speed, CC), auto-exit on swipe, action-rail hiding, icon drawable fallback
-for the pill glyph.
+## Phase 8.1 — v0.9.1-phase8.1: THE ROTATION-FIGHT FIX (SHIPPED)
+
+**Root-cause analysis (log.txt timeline + full smali sweep of the ground-truth
+decode):**
+
+- 23:45:11.937 — on ModalActivity LAUNCH, Instagram itself calls
+  `setRequestedOrientation(1)` (portrait lock), logged right next to
+  "morphe: Utils: Set activity".
+- 23:45:17.986 — OUR engage: `setRequestedOrientation(6)`; display rotates
+  0→1 at 18.165.
+- 23:45:18.198 — **Instagram calls setRequestedOrientation(1) again, +33ms
+  after the engage** — a REACTIVE portrait lock fired by the config change.
+- 23:45:18.276 — OUR OWN A01 restore fires (the rotation's config change
+  flaps the clips fragment lifecycle: pause → resume ~112ms later) → A27
+  sets portrait too + full teardown.
+- 23:45:18.913 — Instagram locks portrait AGAIN (second config delivery).
+- Same pattern repeats identically in the second session (26.020/26.086/
+  26.651). Screen frozen +452ms during the fight.
+
+**The portrait-lock machinery (found in the smali ground truth):**
+
+- `X/6mW` = **`FixedOrientationCompat`** — the single funnel wrapper for every
+  app-side `setRequestedOrientation` (catches the "Only fullscreen activities
+  can request orientation" IllegalStateException; logs tag
+  "FixedOrientationCompat").
+- `X/0XU.A00(activity)` — "app-preferred orientation": `1un.A09(activity)`
+  (is-tablet check, ≥600dp) ? 13 (userLandscape) : **1 (PORTRAIT)** — posted
+  DEFERRED via the `X/0XX` runnable onto a background executor.
+- `BaseFragmentActivity.A1p(Configuration, X/2y8)` — Instagram's
+  onConfigurationChanged wrapper: on EVERY config delivery, if
+  `!A05 && A0I` ("should_allow_rotation") → `0XU.A00(this)` → deferred
+  PORTRAIT. **This is the reactive lock — it fires twice per rotation cycle.**
+- `ModalActivity.onCreate`: reads the `"lock_to_portrait"` intent extra →
+  `A2Q(!lockToPortrait)` → sets `A0I` + calls `0XU.A00` — the launch lock.
+- `BaseFragmentActivity.A2Q(false)` → LOCKED(14) freeze path (immersive off).
+- Both `InstagramMainActivity` AND `ModalActivity` extend
+  `BaseFragmentActivity` → the same lock fights in every entry point.
+- Other `6mW` callers (camera IgLiveCaptureFragment/OnlyQuickCaptureFragment,
+  IgReactActivity, cloud-streaming, bloks/order/signed-out activities) also
+  funnel through the same wrapper.
+- The earlier ROADMAP claim "ZERO setRequestedOrientation callers in the host
+  activities" was wrong: the sweep only matched DIRECT invocations and missed
+  everything routed through the 6mW wrapper.
+
+**The v0.9.1 patch set (patcher v10):**
+
+1. **ORIENTATION-LOCK GATE** — `X/6mW.A00` head-gated with
+   `TTrueReelHelper.A28(activity)`: while `fsForced && activity == saved`,
+   the call returns without setting anything (log: "v0.9 fs: portrait-lock
+   blocked"). This neutralizes the launch lock, the A1p reactive lock AND
+   every other app path, scoped to our activity only. Our own A26/A27 exit
+   paths call `Activity.setRequestedOrientation` DIRECTLY (not via 6mW) and
+   are unaffected.
+2. **TRANSIENT-ROTATION GUARD (A01)** — `.locals` 4→5; at the top: if
+   `fsForced` && the fragment's activity == saved activity && NOT
+   `isFinishing()` && `uptimeMillis() - fsEngageAt < 1500ms` → skip the
+   entire restore (log: "v0.9 restore skipped (fs transient)"). The
+   rotation's own lifecycle flap (pause→resume ~112ms) is not a reels exit.
+   Real exits (activity finishing / any hook after the window) still do the
+   full restore.
+3. **AUTO-EXIT (A20, TikTok behavior)** — while landscape, every layout pass
+   re-runs the detection DFS; 2 CONSECUTIVE non-landscape detections (no
+   surface / <40px / w ≤ 1.25·h) return to portrait via A26 (log: "v0.9 fs:
+   auto-exit (video no longer landscape)"). Counting disabled for the first
+   1500ms after the engage (the rotation transition re-measures the video);
+   landscape detection resets the counter.
+4. **HOOK-SOURCE LOGGING (A2B..A2F)** — the restore hooks now call per-source
+   bridges so the next field log names WHICH lifecycle event fired:
+   A2B=viewer onPause, A2C=viewer onDestroyView, A2D=tab onPause,
+   A2E=tab onDestroyView, A2F=hidden (via the A02 bridge). Each logs
+   "v0.9 hook: restore src=N (...)" then runs A01.
+5. New fields `fsEngageAt:J` (engage uptime) + `fsNonLand:I` (debounce
+   counter); A24 records the engage time + resets the counter; A26/A27 reset
+   it on every exit path. Toast bumped to v0.9.1.
+
+**Local validation performed (offline, against the FULL ground-truth decode
+re-downloaded from the Actions artifacts):**
+
+- Helper v0.9.1 assembles with smali 2.5.2 --api 29: CLEAN; baksmali
+  round-trip instruction-identical (labels/.locals cosmetics only).
+- Patcher v10 run against the full 177k-file base decode: ALL patches
+  applied, ~120 verification checks pass (incl. the 15 new v0.9.1 needles),
+  idempotent re-run clean (exit 0).
+- Every patched target file (9Wz/AFt/1fC/1fI/2Iv/2ZS/0bQ/0bI/6mW/navbar +
+  the 5 helper classes) assembles individually.
+- BuildPatchedApk.yml: v0.9.1 dex-marker verification (26 final-APK string
+  checks incl. 6 new v0.9.1 needles), release tag v0.9.1-phase8.1, YAML
+  validated.
+
+**Expected on-device (v0.9.1):**
+
+- Tap "Full screen" on a landscape reel → the app rotates to REAL landscape
+  and STAYS there: video edge-to-edge, strip hidden, "x" exit circle
+  top-left; the log shows "portrait-lock blocked" instead of the old
+  restore/apply flapping.
+- Tap x / leave Reels / back-press → portrait + full chrome restore.
+- Swipe to a portrait reel while landscape → auto-exit to portrait.
+- Portrait reels browsing unchanged (v0.8 behavior intact).
+
+**Lag watch (user reports slight lag):** unchanged from v0.9 analysis — the
+reapply engine is bounded (5 ticks per entry), v0.9.1 adds no timers; all
+fullscreen logic stays event-driven. Suspected cause remains 4K feed decode.
+
+**Phase 9 candidates (unchanged):** dedicated landscape player UI (scrubber,
+timestamps, speed, CC), portrait-chrome hiding in landscape (top bar / action
+rail / captions), auto-exit on swipe (DONE in v0.9.1), action-rail hiding,
+icon drawable fallback for the pill glyph.
+
+**Phase 9+ ideas from the field evidence:** the "not even normal looking
+horizontal" screenshot (portrait UI + rotated/squished video + right black
+bar) is the mid-fight state; with the rotation sticking, Instagram's own
+onConfigurationChanged path (9Wz re-reads screen dims) should lay its chrome
+out sanely — if anything still looks off in landscape, capture the new log
+("v0.9 hook: restore src=" lines will name the exact lifecycle flow) and a
+screenshot; a Phase 10 can then hide the portrait chrome explicitly while
+fsForced.

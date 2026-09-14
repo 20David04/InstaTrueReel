@@ -40,6 +40,8 @@
 .field public static fsListener:Landroid/view/ViewTreeObserver$OnGlobalLayoutListener;  # v0.9: re-check listener
 .field public static fsBest:Landroid/view/View;                # v0.9: DFS best (largest) video surface
 .field public static fsBestArea:I                              # v0.9: DFS best area (px^2)
+.field public static fsEngageAt:J                              # v0.9.1: uptimeMillis when landscape was engaged
+.field public static fsNonLand:I                               # v0.9.1: consecutive non-landscape detections (auto-exit debounce)
 
 
 # direct methods
@@ -123,7 +125,7 @@
     invoke-virtual {p0}, Landroidx/fragment/app/Fragment;->getActivity()Landroidx/fragment/app/FragmentActivity;
     move-result-object v0
     if-eqz v0, :cond_no_toast
-    const-string v1, "InstaTrueReel v0.9: fullscreen ON"
+    const-string v1, "InstaTrueReel v0.9.1: fullscreen ON"
     const/4 v2, 0x0
     invoke-static {v0, v1, v2}, Landroid/widget/Toast;->makeText(Landroid/content/Context;Ljava/lang/CharSequence;I)Landroid/widget/Toast;
     move-result-object v0
@@ -160,10 +162,36 @@
 
 
 # A01(Landroidx/fragment/app/Fragment;)V == RESTORE original window state + layout.
+# v0.9.1: TRANSIENT-ROTATION GUARD - while landscape fullscreen is active the forced
+# rotation makes Instagram deliver onConfigurationChanged + a fragment pause/resume
+# flap (its FixedOrientationCompat re-asserts portrait on every config delivery and
+# the pager re-runs lifecycle). That pause is NOT a reels exit: if it is the SAME
+# activity, the activity is not finishing, and we engaged landscape less than 1500ms
+# ago, the restore is SKIPPED so the fullscreen state survives the rotation.
 .method public static A01(Landroidx/fragment/app/Fragment;)V
-    .locals 4
+    .locals 5
 
     :try_start_0
+    # ---- v0.9.1: transient-rotation guard ----
+    sget-boolean v0, LX/TTrueReelHelper;->fsForced:Z
+    if-eqz v0, :itr_full_restore
+    sget-object v1, LX/TTrueReelHelper;->A09:Landroid/app/Activity;
+    if-eqz v1, :itr_full_restore
+    invoke-virtual {p0}, Landroidx/fragment/app/Fragment;->getActivity()Landroidx/fragment/app/FragmentActivity;
+    move-result-object v2
+    if-ne v2, v1, :itr_full_restore
+    invoke-virtual {v1}, Landroid/app/Activity;->isFinishing()Z
+    move-result v2
+    if-nez v2, :itr_full_restore
+    invoke-static {}, Landroid/os/SystemClock;->uptimeMillis()J
+    move-result-wide v2
+    sget-wide v0, LX/TTrueReelHelper;->fsEngageAt:J
+    sub-long/2addr v2, v0
+    const-wide/16 v0, 0x5dc
+    cmp-long v4, v2, v0
+    if-ltz v4, :itr_transient_skip
+
+    :itr_full_restore
     # ---- deactivate interceptors FIRST ----
     const/4 v0, 0x0
     sput-boolean v0, LX/TTrueReelHelper;->A05:Z
@@ -257,6 +285,12 @@
     const/4 v1, 0x0
     sput-object v1, LX/TTrueReelHelper;->A00:Landroid/view/Window;
     return-void
+
+    :itr_transient_skip
+    const-string v0, "InstaTrueReel"
+    const-string v1, "v0.9 restore skipped (fs transient)"
+    invoke-static {v0, v1}, Landroid/util/Log;->e(Ljava/lang/String;Ljava/lang/String;)I
+    return-void
 .end method
 
 
@@ -265,7 +299,7 @@
     .locals 0
 
     if-eqz p1, :cond_show
-    invoke-static {p0}, LX/TTrueReelHelper;->A01(Landroidx/fragment/app/Fragment;)V
+    invoke-static {p0}, LX/TTrueReelHelper;->A2F(Landroidx/fragment/app/Fragment;)V
     return-void
 
     :cond_show
@@ -2160,14 +2194,73 @@
     sget-boolean v0, LX/TTrueReelHelper;->A05:Z
     if-eqz v0, :cond_done
 
-    # ---- landscape mode: keep the exit button, hide the pill ----
     sget-boolean v0, LX/TTrueReelHelper;->fsForced:Z
     if-eqz v0, :portrait_check
+
+    # ---- landscape mode: keep the exit button, hide the pill ----
     invoke-static {p0}, LX/TTrueReelHelper;->A25(Landroid/app/Activity;)V
     sget-object v0, LX/TTrueReelHelper;->fsPill:Landroid/view/View;
-    if-eqz v0, :cond_done
+    if-eqz v0, :auto_check
     const/16 v1, 0x8
     invoke-virtual {v0, v1}, Landroid/view/View;->setVisibility(I)V
+    :auto_check
+
+    # ---- v0.9.1 AUTO-EXIT: if the CURRENT video is no longer landscape ----
+    # ---- (user swiped to a portrait reel), return to portrait (TikTok ----
+    # ---- behavior). Debounced: needs 2 consecutive non-landscape ----
+    # ---- detections, disabled for the first 1500ms after the engage ----
+    # ---- (the rotation transition itself re-measures the video). ----
+    invoke-static {}, Landroid/os/SystemClock;->uptimeMillis()J
+    move-result-wide v0
+    sget-wide v2, LX/TTrueReelHelper;->fsEngageAt:J
+    sub-long/2addr v0, v2
+    const-wide/16 v2, 0x5dc
+    cmp-long v4, v0, v2
+    if-ltz v4, :keep_early
+
+    sget-object v0, LX/TTrueReelHelper;->A0F:Landroidx/fragment/app/Fragment;
+    if-eqz v0, :count_nonland
+    invoke-virtual {v0}, Landroidx/fragment/app/Fragment;->getView()Landroid/view/View;
+    move-result-object v0
+    if-eqz v0, :count_nonland
+    const/4 v1, 0x0
+    sput-object v1, LX/TTrueReelHelper;->fsBest:Landroid/view/View;
+    const/4 v1, -0x1
+    sput v1, LX/TTrueReelHelper;->fsBestArea:I
+    const/4 v1, 0x0
+    invoke-static {v0, v1}, LX/TTrueReelHelper;->A21(Landroid/view/View;I)V
+    sget-object v2, LX/TTrueReelHelper;->fsBest:Landroid/view/View;
+    if-eqz v2, :count_nonland
+    invoke-virtual {v2}, Landroid/view/View;->getHeight()I
+    move-result v3
+    const/16 v0, 0x28
+    if-lt v3, v0, :count_nonland
+    invoke-virtual {v2}, Landroid/view/View;->getWidth()I
+    move-result v0
+    int-to-float v0, v0
+    int-to-float v1, v3
+    const/high16 v4, 0x3fa00000    # 1.25f
+    mul-float/2addr v1, v4
+    cmpl-float v0, v0, v1
+    if-lez v0, :count_nonland
+    const/4 v0, 0x0
+    sput v0, LX/TTrueReelHelper;->fsNonLand:I
+    return-void
+
+    :count_nonland
+    sget v0, LX/TTrueReelHelper;->fsNonLand:I
+    add-int/lit8 v0, v0, 0x1
+    sput v0, LX/TTrueReelHelper;->fsNonLand:I
+    const/4 v1, 0x2
+    if-ge v0, v1, :exit_now
+    :keep_early
+    return-void
+
+    :exit_now
+    const-string v0, "InstaTrueReel"
+    const-string v1, "v0.9 fs: auto-exit (video no longer landscape)"
+    invoke-static {v0, v1}, Landroid/util/Log;->e(Ljava/lang/String;Ljava/lang/String;)I
+    invoke-static {}, LX/TTrueReelHelper;->A26()V
     return-void
 
     :portrait_check
@@ -2474,6 +2567,13 @@
     const/4 v1, 0x1
     sput-boolean v1, LX/TTrueReelHelper;->fsForced:Z
 
+    # ---- v0.9.1: record the engage time + reset the auto-exit debounce ----
+    const/4 v1, 0x0
+    sput v1, LX/TTrueReelHelper;->fsNonLand:I
+    invoke-static {}, Landroid/os/SystemClock;->uptimeMillis()J
+    move-result-wide v1
+    sput-wide v1, LX/TTrueReelHelper;->fsEngageAt:J
+
     # ---- rotate: SCREEN_ORIENTATION_SENSOR_LANDSCAPE ----
     const/4 v1, 0x6
     invoke-virtual {v0, v1}, Landroid/app/Activity;->setRequestedOrientation(I)V
@@ -2626,6 +2726,7 @@
 
     const/4 v1, 0x0
     sput-boolean v1, LX/TTrueReelHelper;->fsForced:Z
+    sput v1, LX/TTrueReelHelper;->fsNonLand:I
 
     # ---- remove the exit button ----
     sget-object v1, LX/TTrueReelHelper;->fsExit:Landroid/view/View;
@@ -2700,6 +2801,7 @@
     invoke-virtual {v0, v1}, Landroid/app/Activity;->setRequestedOrientation(I)V
     const/4 v1, 0x0
     sput-boolean v1, LX/TTrueReelHelper;->fsForced:Z
+    sput v1, LX/TTrueReelHelper;->fsNonLand:I
     sget-object v1, LX/TTrueReelHelper;->A0O:Landroid/view/View;
     if-eqz v1, :no_orientation
     const/4 v2, 0x0
@@ -2744,5 +2846,104 @@
     const-string v1, "InstaTrueReel"
     const-string v2, "v0.9 fs cleanup: exception (recovered)"
     invoke-static {v1, v2, v0}, Landroid/util/Log;->e(Ljava/lang/String;Ljava/lang/String;Ljava/lang/Throwable;)I
+    return-void
+.end method
+
+
+# A28(Landroid/app/Activity;)Z == v0.9.1 ORIENTATION-LOCK GATE, injected at the top
+# of X/6mW.A00 (FixedOrientationCompat.setRequestedOrientation wrapper). While
+# landscape fullscreen is engaged on OUR activity, EVERY app-side orientation set
+# (the launch lock, the onConfigurationChanged re-assert via 0XU/0XX, camera/react
+# paths...) is swallowed so nothing can rotate the reels back to portrait. Our own
+# A26/A27 exit paths call Activity.setRequestedOrientation DIRECTLY (not through
+# 6mW), so they are unaffected. Returns true = block the caller's orientation set.
+.method public static A28(Landroid/app/Activity;)Z
+    .locals 2
+
+    sget-boolean v0, LX/TTrueReelHelper;->fsForced:Z
+    if-eqz v0, :ret_false
+    sget-object v0, LX/TTrueReelHelper;->A09:Landroid/app/Activity;
+    if-eqz v0, :ret_false
+    if-ne v0, p0, :ret_false
+
+    const-string v0, "InstaTrueReel"
+    const-string v1, "v0.9 fs: portrait-lock blocked"
+    invoke-static {v0, v1}, Landroid/util/Log;->e(Ljava/lang/String;Ljava/lang/String;)I
+
+    const/4 v0, 0x1
+    return v0
+
+    :ret_false
+    const/4 v0, 0x0
+    return v0
+.end method
+
+
+# A2B(Landroidx/fragment/app/Fragment;)V == v0.9.1 restore bridge, source tag 1
+# (ClipsViewerFragment onPause). Logs WHICH hook fired, then runs the restore.
+.method public static A2B(Landroidx/fragment/app/Fragment;)V
+    .locals 2
+
+    const-string v0, "InstaTrueReel"
+    const-string v1, "v0.9 hook: restore src=1 (viewer onPause)"
+    invoke-static {v0, v1}, Landroid/util/Log;->e(Ljava/lang/String;Ljava/lang/String;)I
+
+    invoke-static {p0}, LX/TTrueReelHelper;->A01(Landroidx/fragment/app/Fragment;)V
+    return-void
+.end method
+
+
+# A2C(Landroidx/fragment/app/Fragment;)V == v0.9.1 restore bridge, source tag 2
+# (ClipsViewerFragment onDestroyView).
+.method public static A2C(Landroidx/fragment/app/Fragment;)V
+    .locals 2
+
+    const-string v0, "InstaTrueReel"
+    const-string v1, "v0.9 hook: restore src=2 (viewer onDestroyView)"
+    invoke-static {v0, v1}, Landroid/util/Log;->e(Ljava/lang/String;Ljava/lang/String;)I
+
+    invoke-static {p0}, LX/TTrueReelHelper;->A01(Landroidx/fragment/app/Fragment;)V
+    return-void
+.end method
+
+
+# A2D(Landroidx/fragment/app/Fragment;)V == v0.9.1 restore bridge, source tag 3
+# (ClipsTabFragment onPause override).
+.method public static A2D(Landroidx/fragment/app/Fragment;)V
+    .locals 2
+
+    const-string v0, "InstaTrueReel"
+    const-string v1, "v0.9 hook: restore src=3 (tab onPause)"
+    invoke-static {v0, v1}, Landroid/util/Log;->e(Ljava/lang/String;Ljava/lang/String;)I
+
+    invoke-static {p0}, LX/TTrueReelHelper;->A01(Landroidx/fragment/app/Fragment;)V
+    return-void
+.end method
+
+
+# A2E(Landroidx/fragment/app/Fragment;)V == v0.9.1 restore bridge, source tag 4
+# (ClipsTabFragment onDestroyView).
+.method public static A2E(Landroidx/fragment/app/Fragment;)V
+    .locals 2
+
+    const-string v0, "InstaTrueReel"
+    const-string v1, "v0.9 hook: restore src=4 (tab onDestroyView)"
+    invoke-static {v0, v1}, Landroid/util/Log;->e(Ljava/lang/String;Ljava/lang/String;)I
+
+    invoke-static {p0}, LX/TTrueReelHelper;->A01(Landroidx/fragment/app/Fragment;)V
+    return-void
+.end method
+
+
+# A2F(Landroidx/fragment/app/Fragment;)V == v0.9.1 restore bridge, source tag 5
+# (onHiddenChanged(true) via the A02 bridge - either fragment).
+.method public static A2F(Landroidx/fragment/app/Fragment;)V
+    .locals 2
+
+    const-string v0, "InstaTrueReel"
+    const-string v1, "v0.9 hook: restore src=5 (hidden)"
+    invoke-static {v0, v1}, Landroid/util/Log;->e(Ljava/lang/String;Ljava/lang/String;)I
+
+    invoke-static {p0}, LX/TTrueReelHelper;->A01(Landroidx/fragment/app/Fragment;)V
     return-void
 .end method

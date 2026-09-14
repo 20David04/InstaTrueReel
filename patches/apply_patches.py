@@ -86,13 +86,41 @@ NEW in v0.9 (phase 8 - TIKTOK-STYLE HORIZONTAL FULLSCREEN):
       Activity.setRequestedOrientation(SENSOR_LANDSCAPE = 6): the host
       activities (InstagramMainActivity configChanges 0xDA0, ModalActivity
       0xDB0 - both include orientation|screenSize|screenLayout|
-      smallestScreenSize) relayout WITHOUT recreation; the full-app smali sweep
-      proved ZERO setRequestedOrientation call sites in the clips dexes or the
-      host activities, so nothing fights the rotation. The comment strip hides
+      smallestScreenSize) relayout WITHOUT recreation. The comment strip hides
       (video claims the full height via the v0.8 reassert engine re-run), an
       "x" exit circle floats top-left; tap -> PORTRAIT(1) + strip visible.
       Detection is event-driven (ViewTreeObserver.OnGlobalLayoutListener on
       the fragment view) - no timers, no polling.
+
+NEW in v0.9.1 (phase 8.1 - THE ROTATION-FIGHT FIX, from the v0.9 field log):
+  The v0.9 field log proved the rotation WAS fought back: Instagram's own
+  BaseFragmentActivity.A1p (its onConfigurationChanged wrapper) re-asserts the
+  app-preferred orientation on EVERY config delivery via 0XU.A00 -> deferred
+  0XX runnable -> 6mW.A00 ("FixedOrientationCompat") -> setRequestedOrientation
+  (PORTRAIT on phones) - twice per rotation cycle - and ModalActivity.onCreate
+  locks portrait at launch through the same funnel. Worse, the rotation's config
+  change flaps the clips fragment lifecycle (pause -> resume ~112ms later), which
+  fired our A01 restore (portrait + full teardown) mid-rotation. Net effect: the
+  app flashed a half-laid-out landscape for ~0.7s and snapped back.
+  21. ORIENTATION-LOCK GATE: X/6mW.A00 (the single funnel for EVERY app-side
+      setRequestedOrientation) is gated - while landscape fullscreen is engaged
+      on OUR activity, the call is swallowed (helper A28). Our own A26/A27 exit
+      paths call Activity.setRequestedOrientation directly, unaffected.
+  22. TRANSIENT-ROTATION GUARD: A01 now skips the whole restore when it fires
+      within 1500ms of the landscape engage, on the same activity, while it is
+      not finishing - the rotation's own fragment-lifecycle flap is NOT a reels
+      exit. Real exits (activity finishing, or any hook after the window)
+      still fully restore.
+  23. HOOK-SOURCE LOGGING: each restore hook calls its own bridge (A2B viewer
+      onPause / A2C viewer onDestroyView / A2D tab onPause / A2E tab
+      onDestroyView / A2F hidden) so the next field log names WHICH lifecycle
+      event fired.
+  24. AUTO-EXIT (TikTok behavior): while landscape, A20 re-detects the current
+      video on every layout pass; 2 consecutive non-landscape detections
+      (debounced, disabled for the first 1500ms) return to portrait
+      automatically - swiping to a portrait reel exits landscape.
+  25. fsEngageAt (engage uptime) + fsNonLand (debounce counter) fields;
+      toast bumped to "InstaTrueReel v0.9.1: fullscreen ON".
 """
 import os
 import re
@@ -125,9 +153,26 @@ NAVBAR_CLASS = os.path.join(
 TABBAR_THEMER = os.path.join(DECODED, "smali_classes17", "X", "2ZS.smali")
 TABBAR_SETTER = os.path.join(DECODED, "smali_classes13", "X", "0bQ.smali")
 TABBAR_ICON = os.path.join(DECODED, "smali_classes13", "X", "0bI.smali")
+FIXED_ORIENT = os.path.join(DECODED, "smali_classes13", "X", "6mW.smali")
+
+# ---- patch 12 (v0.9.1): FixedOrientationCompat orientation-lock gate ----
+# 6mW.A00 is the single funnel for every app-side setRequestedOrientation
+# (launch lock, onConfigurationChanged re-assert, camera/react paths). While
+# our landscape fullscreen is engaged on the saved activity, swallow the call.
+ORIENT_GATE = (
+    "invoke-static {p0}, LX/TTrueReelHelper;->A28(Landroid/app/Activity;)Z\n"
+    "    move-result v0\n"
+    "    if-eqz v0, :itr_orient_continue\n"
+    "    # instatruereel: portrait-lock gate (FixedOrientationCompat)\n"
+    "    return-void\n"
+    "    :itr_orient_continue"
+)
 
 APPLY = "invoke-static/range {p0 .. p0}, LX/TTrueReelHelper;->A00(Landroidx/fragment/app/Fragment;)V"
-RESTORE = "invoke-static/range {p0 .. p0}, LX/TTrueReelHelper;->A01(Landroidx/fragment/app/Fragment;)V"
+RESTORE_VP = "invoke-static/range {p0 .. p0}, LX/TTrueReelHelper;->A2B(Landroidx/fragment/app/Fragment;)V"
+RESTORE_VD = "invoke-static/range {p0 .. p0}, LX/TTrueReelHelper;->A2C(Landroidx/fragment/app/Fragment;)V"
+RESTORE_TP = "invoke-static/range {p0 .. p0}, LX/TTrueReelHelper;->A2D(Landroidx/fragment/app/Fragment;)V"
+RESTORE_TD = "invoke-static/range {p0 .. p0}, LX/TTrueReelHelper;->A2E(Landroidx/fragment/app/Fragment;)V"
 HIDDEN = "invoke-static {p0, p1}, LX/TTrueReelHelper;->A02(Landroidx/fragment/app/Fragment;Z)V"
 
 INTERCEPT_STATUS_COLOR = (
@@ -245,7 +290,7 @@ ON_PAUSE_OVERRIDE_ANDROIDX = (
     "\n"
     "    invoke-super {p0}, Landroidx/fragment/app/Fragment;->onPause()V\n"
     "\n"
-    "    " + RESTORE + "\n"
+    "    " + RESTORE_TP + "\n"
     "\n"
     "    return-void\n"
     ".end method\n"
@@ -382,8 +427,8 @@ def main():
     report.append("ClipsViewerFragment lifecycle (X/9Wz):")
     src = read(CLIPS_VIEWER)
     src, _ = inject_after_locals(src, "onResume()V", APPLY, "9Wz.onResume -> apply")
-    src, _ = inject_after_locals(src, "onPause()V", RESTORE, "9Wz.onPause -> restore")
-    src, _ = inject_after_locals(src, "onDestroyView()V", RESTORE, "9Wz.onDestroyView -> restore")
+    src, _ = inject_after_locals(src, "onPause()V", RESTORE_VP, "9Wz.onPause -> restore(src1)")
+    src, _ = inject_after_locals(src, "onDestroyView()V", RESTORE_VD, "9Wz.onDestroyView -> restore(src2)")
     src = append_method(src, ON_HIDDEN_OVERRIDE_2YN, "onHiddenChanged(Z)V", "9Wz.onHiddenChanged override")
     write(CLIPS_VIEWER, src)
 
@@ -395,7 +440,7 @@ def main():
     if '__redex_internal_original_name:Ljava/lang/String; = "ClipsTabFragment"' not in src:
         errors.append("AFt: expected ClipsTabFragment redex name not found (version drift?)")
     src, _ = inject_after_locals(src, "onResume()V", APPLY, "AFt.onResume -> apply")
-    src, _ = inject_after_locals(src, "onDestroyView()V", RESTORE, "AFt.onDestroyView -> restore")
+    src, _ = inject_after_locals(src, "onDestroyView()V", RESTORE_TD, "AFt.onDestroyView -> restore(src4)")
     src = append_method(src, ON_HIDDEN_OVERRIDE_2YN, "onHiddenChanged(Z)V", "AFt.onHiddenChanged override")
     src = append_method(src, ON_PAUSE_OVERRIDE_ANDROIDX, "onPause()V", "AFt.onPause override")
     write(CLIPS_TAB, src)
@@ -479,17 +524,34 @@ def main():
     )
     write(TABBAR_ICON, src)
 
+    # ---------- 12. v0.9.1: FixedOrientationCompat portrait-lock gate (X/6mW.A00) ----------
+    report.append("Orientation lock gate (X/6mW.A00 FixedOrientationCompat):")
+    src = read(FIXED_ORIENT)
+    if "FixedOrientationCompat" not in src:
+        errors.append("6mW: FixedOrientationCompat marker not found (version drift?)")
+    if ".method public static final A00(Landroid/app/Activity;I)V" not in src:
+        errors.append("6mW: A00(Activity,I)V method not found (version drift?)")
+    src, _ = inject_after_locals(
+        src, "A00(Landroid/app/Activity;I)V", ORIENT_GATE,
+        "6mW.A00 -> fs-orientation gate",
+    )
+    write(FIXED_ORIENT, src)
+
     # ---------- verify ----------
     report.append("Verification:")
     checks = [
         (CLIPS_VIEWER, EER_MARKER, "9Wz.EEr forced-true present"),
         (CLIPS_VIEWER, "const/4 v0, 0x1", "9Wz.EEr returns true"),
         (CLIPS_VIEWER, APPLY, "9Wz apply present"),
-        (CLIPS_VIEWER, RESTORE, "9Wz restore present"),
+        (CLIPS_VIEWER, RESTORE_VP, "9Wz restore (viewer onPause, src1) present"),
+        (CLIPS_VIEWER, RESTORE_VD, "9Wz restore (viewer onDestroyView, src2) present"),
         (CLIPS_VIEWER, HIDDEN, "9Wz hidden bridge present"),
         (CLIPS_TAB, APPLY, "AFt apply present"),
-        (CLIPS_TAB, RESTORE, "AFt restore present"),
+        (CLIPS_TAB, RESTORE_TD, "AFt restore (tab onDestroyView, src4) present"),
+        (CLIPS_TAB, RESTORE_TP, "AFt restore (tab onPause, src3) present"),
         (CLIPS_TAB, HIDDEN, "AFt hidden bridge present"),
+        (FIXED_ORIENT, "LX/TTrueReelHelper;->A28(Landroid/app/Activity;)Z", "6mW.A00 orientation gate present"),
+        (FIXED_ORIENT, ":itr_orient_continue", "6mW.A00 gate label present"),
         (WINDOW_CHROME, "LX/TTrueReelHelper;->A03(Landroid/app/Activity;I)I", "1fC color interceptor present"),
         (NAV_CHROME, "LX/TTrueReelHelper;->A07(Landroid/app/Activity;I)I", "1fI nav interceptor present"),
         (HELPER_DST, ".method public static A00(", "helper apply method present"),
@@ -512,7 +574,7 @@ def main():
         (HELPER_DST, "invoke-direct/range {v2 .. v7}", "helper v0.6 range-invoke arity correct"),
         (HELPER_DST, "0x7f0b3f45", "helper targets swipeable_tab_view_pager"),
         (HELPER_DST, "0x7f0b2246", "helper targets layout_container_main"),
-        (HELPER_DST, 'const-string v1, "InstaTrueReel v0.9: fullscreen ON"', "toast marker v0.9 present"),
+        (HELPER_DST, 'const-string v1, "InstaTrueReel v0.9.1: fullscreen ON"', "toast marker v0.9.1 present"),
         (HELPER_DST, 'v0.6 deblock eval: pager=', "v0.6 deblock eval diagnostics present"),
         (HELPER_DST, 'v0.7 liberate: chain freed (n=', "v0.7 liberation summary log present"),
         (HELPER_DST, 'v0.6 restore-layout: chain restored (n=', "v0.6 chain-restore log present"),
@@ -553,6 +615,21 @@ def main():
         (HELPER_DST, "v0.8 restore: strip overlay reverted", "v0.8 overlay-restore log present"),
         (HELPER_DST, 'v0.9 apply: edge-to-edge + fullscreen armed', "v0.9 apply marker present"),
         (HELPER_DST, "v0.8: video container not found", "v0.8 DFS failure is logged, never silent"),
+        # ---- v0.9.1 (phase 8.1): rotation-fight fix ----
+        (HELPER_DST, ".method public static A28(Landroid/app/Activity;)Z", "v0.9.1 orientation gate method present"),
+        (HELPER_DST, "fsEngageAt:J", "v0.9.1 engage-time field present"),
+        (HELPER_DST, "fsNonLand:I", "v0.9.1 auto-exit debounce field present"),
+        (HELPER_DST, "v0.9 restore skipped (fs transient)", "v0.9.1 transient-rotation guard present"),
+        (HELPER_DST, "v0.9 fs: auto-exit (video no longer landscape)", "v0.9.1 auto-exit log present"),
+        (HELPER_DST, "v0.9 fs: portrait-lock blocked", "v0.9.1 gate-block log present"),
+        (HELPER_DST, ".method public static A2B(Landroidx/fragment/app/Fragment;)V", "v0.9.1 restore bridge A2B present"),
+        (HELPER_DST, ".method public static A2C(Landroidx/fragment/app/Fragment;)V", "v0.9.1 restore bridge A2C present"),
+        (HELPER_DST, ".method public static A2D(Landroidx/fragment/app/Fragment;)V", "v0.9.1 restore bridge A2D present"),
+        (HELPER_DST, ".method public static A2E(Landroidx/fragment/app/Fragment;)V", "v0.9.1 restore bridge A2E present"),
+        (HELPER_DST, ".method public static A2F(Landroidx/fragment/app/Fragment;)V", "v0.9.1 restore bridge A2F present"),
+        (HELPER_DST, "v0.9 hook: restore src=", "v0.9.1 hook-source logging present"),
+        (HELPER_DST, "Landroid/os/SystemClock;->uptimeMillis()J", "v0.9.1 engage-time clock read present"),
+        (HELPER_DST, "Landroid/app/Activity;->isFinishing()Z", "v0.9.1 finishing check present"),
         (HELPER_DST, 'invoke-static {p0}, LX/TTrueReelHelper;->A19(Landroid/app/Activity;)V', "A15 calls the v0.8 overlay step"),
         (HELPER_DST, 'invoke-static {}, LX/TTrueReelHelper;->A1B()V', "overlay restore wired into A00/A10"),
         (HELPER_DST, "WindowManager$LayoutParams", "helper uses correct WindowManager type"),
@@ -640,7 +717,7 @@ def main():
 
 
 def finish():
-    print("InstaTrueReel patch report (v9)")
+    print("InstaTrueReel patch report (v10)")
     print("===============================")
     for line in report:
         print(line)
@@ -686,6 +763,24 @@ def finish():
     print("          configChanges verified), the comment strip hides and the video")
     print("          fills the screen; an x exit circle returns to portrait.")
     print("          Event-driven detection (layout listener), zero timers.")
+    print()
+    print("        + ROTATION-FIGHT FIX (v0.9.1): the v0.9 field log proved Instagram")
+    print("          fights the rotation - BaseFragmentActivity.A1p re-asserts the")
+    print("          app-preferred orientation (PORTRAIT on phones) on EVERY config")
+    print("          delivery via 0XU -> deferred 0XX -> 6mW (FixedOrientationCompat),")
+    print("          and ModalActivity locks portrait at launch through the same")
+    print("          funnel; the config change also flaps the clips fragment")
+    print("          lifecycle, firing our restore mid-rotation. Three fixes:")
+    print("          (1) 6mW.A00 GATE (helper A28) - every app-side orientation set")
+    print("              is swallowed while landscape fullscreen is engaged on our")
+    print("              activity; our own A26/A27 exit paths bypass 6mW and work.")
+    print("          (2) A01 TRANSIENT GUARD - a restore firing within 1500ms of the")
+    print("              engage, on the same non-finishing activity, is SKIPPED (it")
+    print("              is the rotation's own lifecycle flap, not a reels exit).")
+    print("          (3) AUTO-EXIT - while landscape, 2 consecutive non-landscape")
+    print("              detections return to portrait (TikTok swipe behavior).")
+    print("          Plus hook-source logging (A2B..A2F) so the next field log")
+    print("          names WHICH lifecycle event fired every restore.")
 
 
 if __name__ == "__main__":
