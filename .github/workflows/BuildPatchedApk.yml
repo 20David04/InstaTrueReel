@@ -10,7 +10,7 @@ on:
       release_tag:
         description: 'Release tag to create/update (asset is uploaded with --clobber)'
         required: false
-        default: 'v0.6.0-phase5'
+        default: 'v0.7.0-phase6'
 
 env:
   APK_FILE: Instagram-v435.0.0.37.76-patches-v3.8.0.apk
@@ -53,7 +53,7 @@ jobs:
           echo "smali files: $(find decoded -name '*.smali' | wc -l)"
           ls -d decoded/smali* | wc -l
 
-      - name: Apply InstaTrueReel patches (v6, chain liberation + full diagnostics)
+      - name: Apply InstaTrueReel patches (v7, bottom-gap closure + strip telemetry)
         run: |
           python3 patches/apply_patches.py decoded 2>&1 | tee patch_report.txt
 
@@ -100,14 +100,17 @@ jobs:
           # interceptor + tab-bar gate call-sites were compiled into the dex.
           check('classes13.dex', 'TTrueReelHelper', 'interceptor + tab-bar gates (1fC/1fI/0bQ/0bI) present')
           # classes16 hosts the helper + reapply + viewsave classes + fragments:
-          # v0.6 strings prove the new chain-liberation body is inside.
+          # v0.7 strings prove the gap-closure + telemetry body is inside.
           check('classes16.dex', 'TTrueReelHelper', 'helper class defined')
           check('classes16.dex', 'TTrueReelReapply', 'reapply runnable present')
           check('classes16.dex', 'TTrueReelViewSave', 'v0.6 view-save state class present')
-          check('classes16.dex', 'InstaTrueReel v0.6', 'v0.6 toast marker present')
-          check('classes16.dex', 'v0.6 deblock eval', 'v0.6 deblock eval diagnostics present')
-          check('classes16.dex', 'v0.6 liberate: ', 'v0.6 chain liberation diagnostics present')
-          check('classes16.dex', 'v0.6 liberate: chain freed', 'v0.6 liberation summary present')
+          check('classes16.dex', 'InstaTrueReel v0.7', 'v0.7 toast marker present')
+          check('classes16.dex', 'v0.7 liberate: ', 'v0.7 liberation + height telemetry present')
+          check('classes16.dex', 'v0.7 liberate: chain freed', 'v0.7 liberation summary present')
+          check('classes16.dex', 'v0.7 close: ', 'v0.7 gap-closure diagnostics present')
+          check('classes16.dex', 'v0.7 gaps closed (n=', 'v0.7 gap-closure summary present')
+          check('classes16.dex', 'v0.7 tree: dump complete (n=', 'v0.7 bottom-strip dump present')
+          check('classes16.dex', 'v0.7 restore-layout: heights restored', 'v0.7 height-restore present')
           check('classes16.dex', 'v0.6 restore-layout: chain restored', 'v0.6 chain-restore diagnostics present')
           # classes17 hosts 2Iv + 2ZS: helper string proves the lerp gate.
           check('classes17.dex', 'TTrueReelHelper', '2ZS/2Iv gate call-sites present')
@@ -138,28 +141,34 @@ jobs:
           TAG: ${{ github.event.inputs.release_tag }}
         run: |
           NOTES=$(cat <<'EON'
-          **InstaTrueReel v0.6.0 — chain liberation (every entry point full-bleed).**
+          **InstaTrueReel v0.7.0 — bottom-gap closure + strip telemetry.**
 
-          Fixes the two v0.5 field-test failures (16 MB logcat analysis):
+          Builds on v0.6's confirmed win (status bar now transparent + video under it
+          on EVERY entry point) to attack the last opaque area — the comment-bar strip
+          (pixel-verified: video ends at y=1762/1920, "Add comment…" pill sits on an
+          opaque 158 px strip = the old tab-bar slot):
 
-          - **Home-feed entry (Context-Preserving Overlay):** the comment-bar area is no
-            longer opaque — every container bounding the video is liberated (bottom
-            margins + insets padding zeroed while Reels is active), so the video draws
-            edge-to-edge behind the comment row, TikTok-style.
-          - **Watch History / Liked (ModalActivity):** the black status-bar strip is gone —
-            the modal root's `fitsSystemWindows` insets padding is removed while Reels is
-            active, so the video runs under the (now transparent) status and nav bars.
-          - One generic mechanism replaces the fragile hardcoded view-id surgery: the new
-            **chain liberation walk** (helper A09/A11) walks from the reels fragment's own
-            view up to the window decor, saves each ancestor's state, zeroes it, and
-            restores everything on exit. No view ids involved — works on every entry path.
-          - **Full diagnostics:** `adb logcat -s InstaTrueReel` now prints
-            `v0.6 deblock eval:`, `v0.6 liberate: <class> t=.. b=.. mb=.. fits=..` detail
-            lines and `v0.6 liberate: chain freed (n=..)` summaries; every exception is
-            logged (v0.5's silent no-ops can never happen again).
-          - Install: **fully uninstall the previous build first** (signature change), then
-            install this APK. Verify with the toast: `InstaTrueReel v0.6: full-bleed
-            everywhere ON`.
+          - **Bottom-gap closure (A15/A16):** the v0.6 field log proved every ancestor
+            container already has zero bottom padding/margin — the bound is STRUCTURAL
+            (a container shorter than its parent, comment bar in the slot below it).
+            v0.7 walks the chain top-down and sets exact heights that reach each
+            parent's content bottom (FrameLayout-family parents; RecyclerView and
+            ConstraintLayout parents are skipped but logged), saving + restoring
+            originals on exit. Height changes settle on the next layout pass, so the
+            re-apply ticks (100/400/1000/2500/5000 ms) cascade the closure level by
+            level. When the bound container is closed, the video extends to the screen
+            bottom and the comment pill floats over it — TikTok-style.
+          - **Height telemetry:** every `v0.7 liberate:` line now carries
+            `h=<height> ph=<parentHeight>` for each ancestor — the log names every
+            SHORT container directly.
+          - **Bottom-strip tree dump (A17/A18):** one shot at the +100 ms tick, every
+            view in the bottom 35% of the screen is logged with class / resource id /
+            absolute y-range / width / height. If anything is still bounded after
+            v0.7, the culprit view is NAMED in a tiny log for a surgical v0.8 — no
+            more 16 MB dumps needed.
+          - Install: **fully uninstall the previous build first** (signature change),
+            then install this APK. Verify with the toast: `InstaTrueReel v0.7:
+            gap-closure ON`.
 
           ${{ github.event.inputs.notes }}
           EON
@@ -169,22 +178,23 @@ jobs:
             gh release upload "$TAG" "$OUT_APK" --clobber
           else
             gh release create "$TAG" "$OUT_APK" \
-              --title "InstaTrueReel $TAG - chain liberation (all entry points)" \
+              --title "InstaTrueReel $TAG - bottom-gap closure + strip telemetry" \
               --notes "$NOTES"
           fi
 
       - name: Summary
         run: |
           {
-            echo "## InstaTrueReel Build (v0.6 — chain liberation + full diagnostics)"
+            echo "## InstaTrueReel Build (v0.7 — bottom-gap closure + strip telemetry)"
             echo ""
             echo "- Input: \`$APK_FILE\`"
             echo "- Output: \`$OUT_APK\` ($(ls -lh "$OUT_APK" 2>/dev/null | awk '{print $5}'))"
             echo "- Core patch: 9Wz.EEr() forced true (IG native edge-to-edge reels mode)"
             echo "- Interceptors: 1fC.A04 (status bar) + 1fI.A04 (nav bar)"
-            echo "- NEW v0.6: chain liberation walk - zero padding/margins/fitsSystemWindows on"
-            echo "  every ancestor of the reels view while active (fixes ModalActivity + feed path)"
-            echo "- NEW v0.6: X/TTrueReelViewSave state class + full diagnostic logging"
+            echo "- v0.6 kept: chain liberation walk (STATUS BAR FIXED everywhere)"
+            echo "- NEW v0.7: bottom-gap closure A15/A16 (exact-height surgery, top-down,"
+            echo "  cascading via re-apply ticks) + h=/ph= height telemetry"
+            echo "- NEW v0.7: A17/A18 one-shot bottom-strip tree dump (culprit naming)"
             echo "- Release tag: ${{ github.event.inputs.release_tag }}"
             echo "- Notes: ${{ github.event.inputs.notes }}"
           } >> "$GITHUB_STEP_SUMMARY"

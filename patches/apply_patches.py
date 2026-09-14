@@ -1,50 +1,49 @@
 #!/usr/bin/env python3
 """
-InstaTrueReel — smali patcher (v6, Phase 5 — CHAIN LIBERATION + FULL DIAGNOSTICS).
+InstaTrueReel — smali patcher (v7, Phase 6 — BOTTOM-GAP CLOSURE + STRIP TELEMETRY).
 
-Field state (v0.5 tested on Android 10, 9:16, user log android_live_log.txt, 16 MB):
-  * v0.5 hooks fire on ALL entry points (Reels tab, home-feed overlay, Watch History
-    modal, Likes modal) — 5 clean apply/restore markers, zero exceptions.
-  * The re-apply engine provably wins the nav-bar color war on every path
-    (setNavigationBarColor: 0 at +100/400/1000/2500/5000 ms).
-  * BUT the two v0.5 runtime fixes were SILENT NO-OPS: "v0.5 deblock:" and
-    "v0.5 modal:" log lines appear ZERO times in the whole 111k-line log —
-    findViewById(0x7f0b224a/0x7f0b2246/0x7f0b3f45) returned null (or preconditions
-    failed) on every one of the 6 evaluations per entry, and the null-guards
-    skipped silently. Consequences:
-      1. FEED path (Context-Preserving Overlay): comment-bar area stays opaque
-         (the containers bounding the video keep their margins; window decor
-         shows below the video).
-      2. WATCH HISTORY / LIKES path (ModalActivity): ModalActivity.A2T() sets
-         fitsSystemWindows=true on the modal root -> content is inset away from
-         the bars -> transparent bars reveal the black window background ->
-         "nothing is transparent".
-  * Watch History / Likes reels run in com.instagram.modal.ModalActivity
-    (separate window; toast + hooks confirmed there by the log).
+Field state (v0.6 tested on Android 10, 9:16, user log live_log.txt + screenshot
+Screenshot_20260914-150151__01.jpg — pixel-verified):
+  * STATUS BAR IS FIXED ON EVERY ENTRY POINT (home-feed overlay, Watch History,
+    Likes modal, Reels tab): the v0.6 chain liberation zeroed the t=63 status
+    inset padding on TouchInterceptorCoordinatorLayout — video runs under the
+    transparent status bar everywhere. The nav-bar color war stays won.
+  * THE COMMENT-BAR STRIP IS STILL OPAQUE on home-feed / Watch History / Likes:
+    pixel analysis of the screenshot shows video ending at y=1762/1920 with the
+    Litho "Add comment…" pill (rounded #25282d, XIU-built, 126 px) sitting on an
+    opaque #0c1014 background strip (158 px = the old tab-bar slot).
+  * The v0.6 liberate log proves EVERY ancestor's bottom padding AND bottom
+    margin are already ZERO (b=0 mb=0 on all 13 chain entries) — the bound is
+    NOT padding/margin. It is STRUCTURAL: some container is simply SHORTER than
+    its parent (LayoutParams.height or parent measurement), with the comment
+    bar occupying the slot below it (sibling layout).
 
-v0.6 fix — one generic mechanism replaces the fragile hardcoded-ID surgery:
+v0.7 fix — BOTTOM-GAP CLOSURE (helper A15/A16):
 
-  CHAIN LIBERATION (helper A09/A11/A12): walk from the reels fragment's own
-  view UP the parent chain to the decor. For every ancestor ViewGroup, save
-  (paddingTop, paddingBottom, bottomMargin, fitsSystemWindows) ONCE into a
-  TTrueReelViewSave list, then zero them all while reels is active. Restore
-  everything on exit (A10). This covers the ModalActivity root padding AND
-  the MainTabActivity feed-overlay bounding containers in one pass, without
-  relying on any view id. The walk re-runs on every re-apply tick so late
-  re-blocks by Instagram are re-liberated.
+  Walk the same ancestor chain (fragment view -> decor) TOP-DOWN; for every
+  view whose bottom edge falls short of its parent's content bottom, set
+  LayoutParams.height to exactly reach it. Original heights saved once (A0H
+  views / A0I boxed Integers) and restored on exit (A10). FrameLayout-family
+  parents only — RecyclerView parents control child bounds (skipped+logged)
+  and ConstraintLayout parents anchor children by constraints (skipped+logged
+  as cl-skip; needs the obfuscated field map — v0.8 material). Height changes
+  settle on the next layout pass, so the re-apply ticks cascade the closure
+  level by level (100/400/1000/2500/5000 ms).
 
-  FULL DIAGNOSTICS: every action logs ("v0.6 liberate: <class> t=.. b=.. mb=..
-  fits=..", "v0.6 deblock eval: pager=.. main=..", "v0.6 liberate: chain freed
-  (n=..)", "v0.6 restore-layout: chain restored (n=..)"), and every catch block
-  logs its exception — v0.5's silent failure mode can never happen again.
+  STRIP TELEMETRY: the liberate detail line now carries h=<height> ph=<parent
+  height> for every ancestor; and on the 2nd A15 invocation (the +100 ms tick,
+  overlay laid out) a one-shot bottom-strip tree dump (A17/A18) logs every view
+  in the bottom 35% of the screen with class / resource id / absolute y-range /
+  width / height. If anything is still bounded after v0.7, the culprit view is
+  NAMED in the log for a surgical v0.8.
 
 Patches (all idempotent, fail loudly, marked with `instatruereel:` comments):
 
-  kept from v0.3/v0.4/v0.5:
+  kept from v0.3/v0.4/v0.5/v0.6:
     1. X/9Wz.EEr()Z -> forced true (native edge-to-edge reels master switch).
     2. TTrueReelHelper + TTrueReelReapply + TTrueReelViewSave installed (window
        apply/restore, activity-scoped interceptors, per-entry toast + logcat,
-       re-apply engine, v0.6 chain liberation).
+       re-apply engine, v0.6 chain liberation, v0.7 gap closure + telemetry).
     3. ClipsViewerFragment (9Wz) + ClipsTabFragment (AFt) lifecycle hooks.
     4. X/1fC.A04 status-bar color interceptor; X/1fI.A04 nav-bar interceptor.
     5. X/2Iv.A03() top scrim alpha 0.6 -> 0.2 (TikTok-style legibility).
@@ -53,16 +52,12 @@ Patches (all idempotent, fail loudly, marked with `instatruereel:` comments):
     8. X/0bQ.A04 config/theme re-apply path -> bds_transparent while active.
     9. X/0bI.A0B tab icon colors -> white active / 70% white normal while active.
 
-  NEW in v0.6:
-   10. Helper A08 rewritten: logs an eval line on EVERY call ("v0.6 deblock
-       eval: pager=m=N|null main=..") before the (kept) margin zeroing, so the
-       next field log proves whether those ids resolve in the running tree.
-   11. Helper A09 rewritten: generic chain-liberation walk (see above).
-   12. Helper A10 extended: restores the liberated chain + re-dispatches
-       insets, then the v0.5 margin restores.
-   13. New class X/TTrueReelViewSave (the per-view saved state holder).
-   14. All catch blocks log; all version strings bumped to v0.6
-       (toast: "InstaTrueReel v0.6: full-bleed everywhere ON").
+  NEW in v0.7:
+   10. Helper A15/A16: bottom-gap closure walk (see above).
+   11. Helper A11 detail line extended with h=/ph= height telemetry.
+   12. Helper A17/A18: one-shot bottom-strip tree dump (class/id/y/w/h per view).
+   13. Helper A10 extended: restores closed heights before the chain restore.
+   14. Version strings bumped (toast: "InstaTrueReel v0.7: gap-closure ON").
 """
 import os
 import re
@@ -300,25 +295,25 @@ def main():
     if errors:
         finish()
 
-    # ---------- 1. install helpers (v0.6) ----------
+    # ---------- 1. install helpers (v0.7) ----------
     os.makedirs(os.path.dirname(HELPER_DST), exist_ok=True)
     if os.path.isfile(HELPER_DST):
         report.append("  [skip] helper TTrueReelHelper already installed")
     else:
         shutil.copyfile(HELPER_SRC, HELPER_DST)
-        report.append("  [ ok ] helper TTrueReelHelper v0.6 installed -> smali_classes16/X/")
+        report.append("  [ ok ] helper TTrueReelHelper v0.7 installed -> smali_classes16/X/")
 
     if os.path.isfile(REAPPLY_DST):
         report.append("  [skip] helper TTrueReelReapply already installed")
     else:
         shutil.copyfile(REAPPLY_SRC, REAPPLY_DST)
-        report.append("  [ ok ] helper TTrueReelReapply v0.6 installed -> smali_classes16/X/")
+        report.append("  [ ok ] helper TTrueReelReapply v0.7 installed -> smali_classes16/X/")
 
     if os.path.isfile(VIEWSAVE_DST):
         report.append("  [skip] helper TTrueReelViewSave already installed")
     else:
         shutil.copyfile(VIEWSAVE_SRC, VIEWSAVE_DST)
-        report.append("  [ ok ] helper TTrueReelViewSave v0.6 installed -> smali_classes16/X/")
+        report.append("  [ ok ] helper TTrueReelViewSave v0.7 installed -> smali_classes16/X/")
 
     # ---------- 2. THE CORE PATCH: force 9Wz.EEr() = true ----------
     report.append("ClipsViewerFragment native edge-to-edge switch (X/9Wz.EEr):")
@@ -466,11 +461,29 @@ def main():
         (HELPER_DST, "invoke-direct/range {v2 .. v7}", "helper v0.6 range-invoke arity correct"),
         (HELPER_DST, "0x7f0b3f45", "helper targets swipeable_tab_view_pager"),
         (HELPER_DST, "0x7f0b2246", "helper targets layout_container_main"),
-        (HELPER_DST, 'const-string v1, "InstaTrueReel v0.6: full-bleed everywhere ON"', "toast marker v0.6 present"),
+        (HELPER_DST, 'const-string v1, "InstaTrueReel v0.7: gap-closure ON"', "toast marker v0.7 present"),
         (HELPER_DST, 'v0.6 deblock eval: pager=', "v0.6 deblock eval diagnostics present"),
-        (HELPER_DST, 'v0.6 liberate: chain freed (n=', "v0.6 liberation summary log present"),
+        (HELPER_DST, 'v0.7 liberate: chain freed (n=', "v0.7 liberation summary log present"),
         (HELPER_DST, 'v0.6 restore-layout: chain restored (n=', "v0.6 chain-restore log present"),
-        (HELPER_DST, 'v0.6 liberate: exception (recovered)', "v0.6 exceptions are logged, never silent"),
+        (HELPER_DST, 'v0.7 restore-layout: heights restored (n=', "v0.7 height-restore log present"),
+        (HELPER_DST, 'v0.7 liberate: exception (recovered)', "v0.7 exceptions are logged, never silent"),
+        (HELPER_DST, 'const-string v1, " h="', "v0.7 height telemetry (h=) present"),
+        (HELPER_DST, 'const-string v1, " ph="', "v0.7 parent-height telemetry (ph=) present"),
+        (HELPER_DST, ".method public static A15(", "helper v0.7 gap-closure walk present"),
+        (HELPER_DST, ".method public static A16(", "helper v0.7 close-single-gap present"),
+        (HELPER_DST, ".method public static A17(", "helper v0.7 strip-dump entry present"),
+        (HELPER_DST, ".method public static A18(", "helper v0.7 recursive dumper present"),
+        (HELPER_DST, "A0H:Ljava/util/ArrayList;", "helper v0.7 closed-views list field present"),
+        (HELPER_DST, "A0I:Ljava/util/ArrayList;", "helper v0.7 saved-heights list field present"),
+        (HELPER_DST, "A0J:I", "helper v0.7 dump counter field present"),
+        (HELPER_DST, "A0K:I", "helper v0.7 tree line counter field present"),
+        (HELPER_DST, 'v0.7 close: skip-rv ', "v0.7 RecyclerView-skip diagnostics present"),
+        (HELPER_DST, 'v0.7 close: cl-skip ', "v0.7 ConstraintLayout-skip diagnostics present"),
+        (HELPER_DST, 'v0.7 gaps closed (n=', "v0.7 gap-closure summary log present"),
+        (HELPER_DST, 'v0.7 tree: dump complete (n=', "v0.7 strip-dump summary log present"),
+        (HELPER_DST, "Landroidx/recyclerview/widget/RecyclerView;", "v0.7 RecyclerView parent check present"),
+        (HELPER_DST, "Landroidx/constraintlayout/widget/ConstraintLayout;", "v0.7 ConstraintLayout parent check present"),
+        (HELPER_DST, "Landroid/view/ViewGroup$LayoutParams;->height:I", "v0.7 exact-height surgery present"),
         (HELPER_DST, "WindowManager$LayoutParams", "helper uses correct WindowManager type"),
         (VIEWSAVE_DST, ".class public LX/TTrueReelViewSave;", "viewsave class present"),
         (VIEWSAVE_DST, "A00:Landroid/view/View;", "viewsave holds view ref"),
@@ -482,7 +495,7 @@ def main():
         (REAPPLY_DST, ".implements Ljava/lang/Runnable;", "reapply runnable present"),
         (REAPPLY_DST, "A01:Landroid/app/Activity;", "reapply carries activity ref"),
         (REAPPLY_DST, "TTrueReelHelper;->A08(Landroid/app/Activity;)V", "reapply calls deblock"),
-        (REAPPLY_DST, "TTrueReelHelper;->A09(Landroid/app/Activity;)V", "reapply calls chain liberation (v0.6)"),
+        (REAPPLY_DST, "TTrueReelHelper;->A09(Landroid/app/Activity;)V", "reapply calls chain liberation (-> v0.7 gap closure)"),
         (REELS_DELEGATE, SCRIM_MARKER, "2Iv top scrim 0.2 marker present"),
         (REELS_DELEGATE, "0x3fc999999999999aL", "2Iv top scrim 0.2 literal present"),
         (NAVBAR_CLASS, NAVBAR_MARKER, "navbar transparent marker present"),
@@ -520,7 +533,7 @@ def main():
 
 
 def finish():
-    print("InstaTrueReel patch report (v6)")
+    print("InstaTrueReel patch report (v7)")
     print("===============================")
     for line in report:
         print(line)
@@ -533,17 +546,21 @@ def finish():
     print()
     print("All patches applied cleanly.")
     print()
-    print("v0.6 = v0.5 (EEr=true + helper + interceptors + scrim 0.2 + navbar null")
-    print("        + transparent main tab bar 2ZS/0bQ + white icons 0bI)")
-    print("        + CHAIN LIBERATION: generic ancestor walk from the reels fragment")
-    print("          view to the decor — saves + zeroes paddingTop/Bottom, bottomMargin")
-    print("          and fitsSystemWindows of every bounding container while reels is")
-    print("          active (fixes ModalActivity black strip + feed-path opaque bottom")
-    print("          without relying on hardcoded view ids) — restored on exit.")
-    print("        + NEW class X/TTrueReelViewSave (per-view saved state).")
-    print("        + FULL DIAGNOSTICS: 'v0.6 deblock eval', 'v0.6 liberate:' detail")
-    print("          lines, chain freed/restored summaries, and every exception logged.")
-    print("        + re-apply ticks re-run the walk at 100/400/1000/2500/5000 ms.")
+    print("v0.7 = v0.6 (EEr=true + helper + interceptors + scrim 0.2 + navbar null")
+    print("        + transparent main tab bar 2ZS/0bQ + white icons 0bI + chain")
+    print("        liberation [STATUS BAR FIXED EVERYWHERE per v0.6 field test])")
+    print("        + BOTTOM-GAP CLOSURE: the v0.6 log proved all ancestor paddings/")
+    print("          margins are already zero — the remaining bound is structural")
+    print("          (a container SHORTER than its parent, comment bar in the slot")
+    print("          below). A15/A16 walk the chain top-down and set exact heights")
+    print("          that reach each parent's content bottom (FrameLayout-family")
+    print("          parents; RecyclerView/ConstraintLayout skipped but logged),")
+    print("          saved + restored on exit, cascading across re-apply ticks.")
+    print("        + HEIGHT TELEMETRY: 'v0.7 liberate:' lines now carry h=<height>")
+    print("          ph=<parentHeight> for every ancestor.")
+    print("        + STRIP DUMP (A17/A18): one-shot log of every view in the bottom")
+    print("          35% of the screen (class/id/y-range/w/h) — if anything is still")
+    print("          bounded, the culprit view is NAMED for a surgical v0.8.")
 
 
 if __name__ == "__main__":

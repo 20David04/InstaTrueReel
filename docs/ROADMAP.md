@@ -506,3 +506,112 @@ is unfixable blind** — v0.6 removes the id dependency AND makes every step lou
   padding tweak for the Litho comment row (X/XIU.A0i / clips comment bar).
 - On Android 15+ devices: color writes become no-ops (targetSdk 35) — the chain
   liberation + EEr native mode remain the working mechanism (future-proof).
+
+---
+
+# Phase 6 — v0.7.0 (BOTTOM-GAP CLOSURE + STRIP TELEMETRY)
+
+## Field test of v0.6.0 (user device, Android 10, 9:16 — log live_log.txt, 1.1 MB,
+## screenshot Screenshot_20260914-150151__01.jpg — PIXEL-VERIFIED)
+
+User sequence: home-feed reel entry only. Verified from the log + pixel analysis
+of the screenshot:
+
+- **STATUS BAR FIXED ON EVERY PATH** — the v0.6 chain liberation zeroed the t=63
+  status inset on `TouchInterceptorCoordinatorLayout`; video now runs under the
+  transparent status bar on home-feed, Watch History, Likes AND the Reels tab.
+  The nav-bar color war stays won (setNavigationBarColor: 0 on every tick).
+- **The comment-bar strip remains opaque** (home-feed + Watch History + Likes):
+  pixel-verified geometry (1080x1920): video ends at y=1762; the Litho
+  "Add comment…" pill (rounded #25282d, 126 px tall, x=42..1038 — the XIU-built
+  row with `clips_viewer_comment_bar_background` 0x7f08042f) sits on an opaque
+  #0c1014 strip (158 px = the old tab-bar slot; 21 px above the pill, 11 px
+  below, side margins).
+- The v0.6 walk log is decisive: **every ancestor has b=0 mb=0** (13 chain
+  entries, only t=63 was non-zero). The bound on the video is NOT padding and
+  NOT margin — it is STRUCTURAL: a container in the chain is simply SHORTER
+  than its parent (LayoutParams.height or parent measurement), with the comment
+  bar occupying the slot below it (sibling layout). The chain (fragment → decor):
+  IgFrameLayout → FrameLayout → X.0fo (ViewPager2's RecyclerView = the vertical
+  reels pager "ClipsViewPagerImpl" owned by 9Wz via X/ADl) → ViewPager2 →
+  IgFrameLayout → ConstraintLayout → TouchInterceptorCoordinatorLayout →
+  SwipeNavigationContainer → IgFrameLayout → ContentFrameLayout →
+  FitWindowsLinearLayout → FrameLayout → LinearLayout (decor root).
+- Static ground truth (full 177k-smali decode artifact re-downloaded + jadx):
+  * `X/ADl` = the fragment's "ClipsViewPagerImpl" (owns the vertical pager A0A,
+    VelocityTracker drag floats, ACN item-binder ref) — 9Wz constructs it.
+  * `X/XIU.A0i` (smali_classes10) builds the comment pill Litho row: drawable
+    0x7f08042f, 30dp corner radius, string 0x7f131bf3 ("Add a comment…").
+  * The bundled ConstraintLayout is Meta-repackaged: its LayoutParams class is
+    the fully-obfuscated `LX/0fW;` (fields A00..A0d) — blind constraint-field
+    surgery is NOT possible; ConstraintLayout-parent children are skipped (and
+    logged) by the v0.7 gap closure until the field map is derived (v0.8).
+
+## v0.7.0 patch set
+
+1. All v0.3–v0.6 patches kept unchanged (EEr=true; 1fC/1fI interceptors;
+   9Wz/AFt lifecycle hooks; re-apply engine + toast/logcat; 2Iv scrim 0.2;
+   ClipsViewerNavigationBar null background; 2ZS/0bQ/0bI tab-bar gates;
+   v0.6 chain liberation + ViewSave).
+2. **NEW helper A15/A16 — bottom-gap closure**: walk the ancestor chain
+   TOP-DOWN (decor-most first); for every view whose bottom edge falls short of
+   its parent's content bottom, set `LayoutParams.height` to exactly reach it.
+   Original heights saved once (A0H views / A0I boxed Integers, identity scan),
+   restored on exit (A10). RecyclerView parents (they control child bounds) and
+   ConstraintLayout parents (constraint anchors; obfuscated LP fields) are
+   skipped but logged (`v0.7 close: skip-rv/cl-skip <class>`). Because height
+   changes settle on the NEXT layout pass, the re-apply ticks cascade the
+   closure level by level (100/400/1000/2500/5000 ms) — apply closes the
+   outermost short container, +100 ms the next level, etc.
+3. **A11 detail line extended with h=<height> ph=<parentHeight>** — every
+   ancestor's height + its parent's height is now in the log; every SHORT
+   container is named directly.
+4. **NEW helper A17/A18 — one-shot bottom-strip tree dump** at the +100 ms
+   re-apply tick (2nd A15 invocation, overlay laid out): recursively logs every
+   view whose absolute bottom edge is in the bottom 35% of the screen — class,
+   resource id (hex), absolute y-range, width, height; GONE views skipped;
+   capped at 260 lines. This names the comment-pill container, every wrapper
+   around it, and every bounded container in one shot.
+5. A10 restore extended: heights restored (parallel lists) BEFORE the chain
+   restore; both lists cleared.
+6. Version strings bumped (toast: "InstaTrueReel v0.7: gap-closure ON").
+
+## Local validation performed (offline, against the FULL 177k-file base decode)
+
+- smali 2.5.2 assemble --api 29: CLEAN; baksmali round-trip BYTE-IDENTICAL
+  (md5 match) — register allocation, nested try/catch, and all invoke arities
+  survive reassembly.
+- apply_patches.py v7 run against the full base decode: ALL patches applied,
+  ~90 verification checks pass (incl. all new v0.7 needles), idempotent re-run
+  clean (exit 0).
+- Every patched target file (9Wz/AFt/1fC/1fI/2Iv/2ZS/0bQ/0bI/navbar/helper)
+  assembles individually.
+- BuildPatchedApk.yml: v0.7 dex-marker verification (12 final-APK string
+  checks), release tag v0.7.0-phase6, YAML validated.
+
+## Expected on-device (v0.7)
+
+- If the bound is a FrameLayout-family height (e.g., the vertical reels pager
+  inside its IgFrameLayout host, or a feed container): video extends to the
+  screen bottom, the comment pill floats over it (TikTok-style), restore on
+  exit intact.
+- If the bound is a ConstraintLayout constraint: unchanged visuals, but the log
+  now contains `v0.7 close: cl-skip <class>` + the h/ph chain telemetry + the
+  full bottom-strip tree dump — a surgical v0.8 can then clear the exact
+  constraint field (map via the X/0fW solver) or patch the layout builder at
+  the source.
+
+## Next (Phase 7 candidates — after v0.7 field test)
+
+- Read the new log: `v0.7 close:` lines (what was closed, old→new height),
+  `v0.7 gaps closed (n=)`, `v0.7 liberate: … h=… ph=…` (short containers),
+  `v0.7 tree:` (full bottom-strip inventory). One small logcat capture names
+  whatever remains.
+- If `cl-skip` lines appear for the binding container: derive the X/0fW
+  constraint field map (which A0x field is bottomToTopOf/bottomToBottomOf) from
+  the ConstraintLayout solver smali, then clear the bottom anchor at runtime
+  (v0.8) — or patch the overlay layout builder at the source.
+- If the strip persists with NO short container anywhere: the bound lives
+  INSIDE the fragment's Litho item (stacked section) — patch the item root
+  builder (ACO.A0w / I45 family) so the media component gets the full page
+  height and the comment row overlays (v0.8 static Litho patch).

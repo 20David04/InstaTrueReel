@@ -8,32 +8,32 @@ floating UI. Built entirely with GitHub Actions (decompile → smali patch → r
 
 | Release | APK | What |
 |---|---|---|
-| [v0.6.0-phase5](https://github.com/Skyro7777777/InstaTrueReel/releases/tag/v0.6.0-phase5) | `Instagram-v435.0.0.37.76-InstaTrueReel-signed.apk` | **Chain liberation — every entry point full-bleed**: fixes home-feed comment-bar strip + Watch History/Liked (ModalActivity) black bars; full logcat diagnostics |
+| [v0.7.0-phase6](https://github.com/Skyro7777777/InstaTrueReel/releases/tag/v0.7.0-phase6) | `Instagram-v435.0.0.37.76-InstaTrueReel-signed.apk` | **Bottom-gap closure + strip telemetry**: attacks the last opaque area (comment-bar strip) with exact-height surgery on short containers; names any remaining culprit view in a tiny log |
+| [v0.6.0-phase5](https://github.com/Skyro7777777/InstaTrueReel/releases/tag/v0.6.0-phase5) | `Instagram-v435.0.0.37.76-InstaTrueReel-signed.apk` | **Chain liberation — STATUS BAR FIXED ON EVERY ENTRY POINT** (home-feed overlay, Watch History, Likes, Reels tab); full logcat diagnostics |
 | [v0.5.0-phase4](https://github.com/Skyro7777777/InstaTrueReel/releases/tag/v0.5.0-phase4) | `Instagram-v435.0.0.37.76-InstaTrueReel-signed.apk` | **Full-bleed bottom + modal path attempt**: transparent main tab bar (2ZS/0bQ/0bI) + runtime view-id de-block (turned out to be a silent no-op — fixed in v0.6) |
 | [v0.4.0-phase3](https://github.com/Skyro7777777/InstaTrueReel/releases/tag/v0.4.0-phase3) | `Instagram-v435.0.0.37.76-InstaTrueReel-signed.apk` | **TikTok-style overlays**: v0.3 + top-bar scrim 0.6 → 0.2 alpha + fully transparent bottom comment bar |
 | [v0.3.0-phase2](https://github.com/Skyro7777777/InstaTrueReel/releases/tag/v0.3.0-phase2) | `Instagram-v435.0.0.37.76-InstaTrueReel-signed.apk` | **Native edge-to-edge**: forces Instagram's own immersive Reels mode on (`9Wz.EEr → true`) + status/nav-bar interceptors |
 | [v0.2.0-phase1.1](https://github.com/Skyro7777777/InstaTrueReel/releases/tag/v0.2.0-phase1.1) | `Instagram-v435.0.0.37.76-InstaTrueReel-signed.apk` | Window-chrome interceptors only (superseded) |
 | [v0.1.0-phase1](https://github.com/Skyro7777777/InstaTrueReel/releases/tag/v0.1.0-phase1) | `Instagram-v435.0.0.37.76-InstaTrueReel-signed.apk` | Initial attempt (superseded) |
 
-> **Always grab the newest release (v0.6.0).** The 16 MB logcat from the v0.5 field test
-> proved the v0.5 runtime fixes never executed (silent no-ops: hardcoded view ids never
-> resolved, and the failures were swallowed without logging). v0.6 replaces them with one
-> generic mechanism — the **chain liberation walk**: while Reels is active it walks from
-> the reels fragment's own view up to the window decor and zeroes the top/bottom padding,
-> bottom margins and `fitsSystemWindows` of **every bounding container** (restored on
-> exit). No view ids involved — so it works on all entry points:
+> **Always grab the newest release (v0.7.0).** The v0.6 field test (log + pixel-verified
+> screenshot) CONFIRMED the status bar is fixed on every entry point — video now runs
+> under the transparent status bar on home-feed, Watch History, Likes and the Reels tab.
+> The one remaining opaque area is the **comment-bar strip**: pixel analysis shows the
+> video ends 158 px above the screen bottom with the "Add comment…" pill sitting on an
+> opaque background in the old tab-bar slot. The v0.6 log proved every container's
+> bottom padding/margin is already zero — the bound is STRUCTURAL (a container shorter
+> than its parent). v0.7 adds the **bottom-gap closure walk**: it walks the container
+> chain top-down and gives every short container an exact height that reaches its
+> parent's bottom (saved + restored on exit, cascading across the re-apply ticks).
+> When the bound container is closed, the video extends to the screen bottom and the
+> comment pill floats over it — TikTok-style.
 >
-> - **Reels tab** — already perfect in v0.5 (both bars transparent over full-bleed video).
-> - **Home-feed entry (Context-Preserving Overlay)** — the opaque comment-bar strip is
->   gone: the containers that cut the video off above the "Add comment…" row are
->   liberated, video draws edge-to-edge behind it.
-> - **Watch History / Liked (ModalActivity)** — the black status-bar strip is gone: the
->   modal root's `fitsSystemWindows` insets padding is removed, video runs under the
->   (already color-won) transparent status + nav bars.
->
-> v0.6 also **logs everything**: `adb logcat -s InstaTrueReel` now prints per-view detail
-> lines (`v0.6 liberate: <class> t=… b=… mb=… fits=…`) and every exception — if anything
-> is still off on your device, the log will name the exact culprit view for v0.7.
+> v0.7 also turns the log into a full map: every `v0.7 liberate:` line carries
+> `h=<height> ph=<parentHeight>` (naming every short container), and a one-shot
+> **bottom-strip tree dump** logs every view in the bottom 35% of the screen with
+> class / id / position / size. If anything is still bounded, the culprit view is
+> NAMED in a tiny `adb logcat -s InstaTrueReel` capture for a surgical v0.8.
 
 ### Install (IMPORTANT — read fully)
 
@@ -61,35 +61,38 @@ floating UI. Built entirely with GitHub Actions (decompile → smali patch → r
 InstaTrueReel is **raw smali patching, always-on, zero settings**. It activates automatically
 the moment you enter Reels and deactivates when you leave.
 
-**How to confirm you're really running v0.6:** every time you enter Reels, a small popup
+**How to confirm you're really running v0.7:** every time you enter Reels, a small popup
 message (a "toast") appears at the bottom of the screen:
 
 ```
-InstaTrueReel v0.6: full-bleed everywhere ON
+InstaTrueReel v0.7: gap-closure ON
 ```
 
-- **Toast shows + no black strip** → working.
-- **Toast shows + still a black strip behind the status bar** → open an issue (a path we
-  haven't covered yet).
+- **Toast shows + video reaches the screen bottom behind the comment pill** → working.
+- **Toast shows + still an opaque strip below the video** → grab the tiny log (below) and
+  open an issue — v0.7's diagnostics name the culprit view for v0.8.
 - **No toast at all** → you are NOT running this build. The install failed or the old APK is
   still installed. Uninstall Instagram completely (check the app drawer — long-press →
-  uninstall), reboot if in doubt, then install the v0.6 APK again.
+  uninstall), reboot if in doubt, then install the v0.7 APK again.
 
-Optional (advanced): run `adb logcat -s InstaTrueReel` while entering Reels — v0.6 logs
-`apply: edge-to-edge engaged (fresh entry)`, `restore: ...`, and NEW per-view detail lines:
+Optional (advanced): run `adb logcat -s InstaTrueReel` while entering Reels — v0.7 logs
+`apply: edge-to-edge engaged (fresh entry)`, `restore: ...`, per-view detail lines AND
+the new gap-closure telemetry:
 
 ```
-v0.6 deblock eval: pager=m=248 main=m=248
-v0.6 liberate: android.widget.FrameLayout t=0 b=0 mb=0 fits=false
-v0.6 liberate: X.1zY t=72 b=63 mb=0 fits=false     ← the containers it freed
-v0.6 liberate: chain freed (n=5)
-v0.6 restore-layout: chain restored (n=5)
+v0.6 deblock eval: pager=m=0 main=m=0
+v0.7 liberate: androidx.viewpager2.widget.ViewPager2 t=0 b=0 mb=0 fits=false h=1762 ph=1920   ← short container!
+v0.7 liberate: chain freed (n=13)
+v0.7 close: androidx.viewpager2.widget.ViewPager2 h=1762->1920 gap=158                          ← gap closed
+v0.7 gaps closed (n=1)
+v0.7 tree: X.XIU ... y=[1783..1908] w=996                                                        ← strip inventory
+v0.7 tree: dump complete (n=57)
+v0.7 restore-layout: heights restored (n=1)
 ```
 
-If anything still looks off on your device, capture that log (it's small — no need for a
-full 16 MB capture; `adb logcat -s InstaTrueReel` only logs our tag) and open an issue:
-the `v0.6 liberate:` lines name the exact views involved, so v0.7 can patch the precise
-culprit.
+If the strip persists, capture that log (it's small — `adb logcat -s InstaTrueReel` only
+logs our tag) and open an issue: the `v0.7 liberate:` heights, the `v0.7 close:` actions
+and the `v0.7 tree:` inventory name the exact remaining culprit for a surgical v0.8.
 
 ### What v0.3 changes
 
