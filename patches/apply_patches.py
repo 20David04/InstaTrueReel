@@ -77,6 +77,22 @@ NEW in v0.8 (strip-overlay transformation - THE comment-bar fix):
       on fresh entry (wired into A00). Inert when no strip exists (reels
       tab: gap == 0). Idempotent re-assert on every re-apply tick.
   19. Version strings bumped (toast: "InstaTrueReel v0.8: strip-overlay ON").
+
+NEW in v0.9 (phase 8 - TIKTOK-STYLE HORIZONTAL FULLSCREEN):
+  20. A20-A27 + fs* fields + TTrueReelClick + TTrueReelRecheck classes: while a
+      LANDSCAPE video (largest TextureView under the fragment view, w > 1.25*h)
+      is on screen, a TikTok-style "Full screen" pill (60% black rounded, bold
+      white) floats in the letterbox bar under the video. Tap ->
+      Activity.setRequestedOrientation(SENSOR_LANDSCAPE = 6): the host
+      activities (InstagramMainActivity configChanges 0xDA0, ModalActivity
+      0xDB0 - both include orientation|screenSize|screenLayout|
+      smallestScreenSize) relayout WITHOUT recreation; the full-app smali sweep
+      proved ZERO setRequestedOrientation call sites in the clips dexes or the
+      host activities, so nothing fights the rotation. The comment strip hides
+      (video claims the full height via the v0.8 reassert engine re-run), an
+      "x" exit circle floats top-left; tap -> PORTRAIT(1) + strip visible.
+      Detection is event-driven (ViewTreeObserver.OnGlobalLayoutListener on
+      the fragment view) - no timers, no polling.
 """
 import os
 import re
@@ -92,6 +108,10 @@ REAPPLY_SRC = os.path.join(HERE, "helper_TTrueReelReapply.smali")
 REAPPLY_DST = os.path.join(DECODED, "smali_classes16", "X", "TTrueReelReapply.smali")
 VIEWSAVE_SRC = os.path.join(HERE, "helper_TTrueReelViewSave.smali")
 VIEWSAVE_DST = os.path.join(DECODED, "smali_classes16", "X", "TTrueReelViewSave.smali")
+CLICK_SRC = os.path.join(HERE, "helper_TTrueReelClick.smali")
+CLICK_DST = os.path.join(DECODED, "smali_classes16", "X", "TTrueReelClick.smali")
+RECHECK_SRC = os.path.join(HERE, "helper_TTrueReelRecheck.smali")
+RECHECK_DST = os.path.join(DECODED, "smali_classes16", "X", "TTrueReelRecheck.smali")
 
 CLIPS_VIEWER = os.path.join(DECODED, "smali_classes16", "X", "9Wz.smali")
 CLIPS_TAB = os.path.join(DECODED, "smali_classes16", "X", "AFt.smali")
@@ -334,6 +354,18 @@ def main():
         shutil.copyfile(VIEWSAVE_SRC, VIEWSAVE_DST)
         report.append("  [ ok ] helper TTrueReelViewSave v0.7 installed -> smali_classes16/X/")
 
+    if os.path.isfile(CLICK_DST):
+        report.append("  [skip] helper TTrueReelClick already installed")
+    else:
+        shutil.copyfile(CLICK_SRC, CLICK_DST)
+        report.append("  [ ok ] helper TTrueReelClick v0.9 installed -> smali_classes16/X/")
+
+    if os.path.isfile(RECHECK_DST):
+        report.append("  [skip] helper TTrueReelRecheck already installed")
+    else:
+        shutil.copyfile(RECHECK_SRC, RECHECK_DST)
+        report.append("  [ ok ] helper TTrueReelRecheck v0.9 installed -> smali_classes16/X/")
+
     # ---------- 2. THE CORE PATCH: force 9Wz.EEr() = true ----------
     report.append("ClipsViewerFragment native edge-to-edge switch (X/9Wz.EEr):")
     src = read(CLIPS_VIEWER)
@@ -480,7 +512,7 @@ def main():
         (HELPER_DST, "invoke-direct/range {v2 .. v7}", "helper v0.6 range-invoke arity correct"),
         (HELPER_DST, "0x7f0b3f45", "helper targets swipeable_tab_view_pager"),
         (HELPER_DST, "0x7f0b2246", "helper targets layout_container_main"),
-        (HELPER_DST, 'const-string v1, "InstaTrueReel v0.8: strip-overlay ON"', "toast marker v0.8 present"),
+        (HELPER_DST, 'const-string v1, "InstaTrueReel v0.9: fullscreen ON"', "toast marker v0.9 present"),
         (HELPER_DST, 'v0.6 deblock eval: pager=', "v0.6 deblock eval diagnostics present"),
         (HELPER_DST, 'v0.7 liberate: chain freed (n=', "v0.7 liberation summary log present"),
         (HELPER_DST, 'v0.6 restore-layout: chain restored (n=', "v0.6 chain-restore log present"),
@@ -519,7 +551,7 @@ def main():
         (HELPER_DST, "A0V:Z", "v0.8 weight-saved flag present"),
         (HELPER_DST, 'v0.8 overlay: ', "v0.8 overlay telemetry log present"),
         (HELPER_DST, "v0.8 restore: strip overlay reverted", "v0.8 overlay-restore log present"),
-        (HELPER_DST, 'v0.8 apply: edge-to-edge engaged', "v0.8 apply marker present"),
+        (HELPER_DST, 'v0.9 apply: edge-to-edge + fullscreen armed', "v0.9 apply marker present"),
         (HELPER_DST, "v0.8: video container not found", "v0.8 DFS failure is logged, never silent"),
         (HELPER_DST, 'invoke-static {p0}, LX/TTrueReelHelper;->A19(Landroid/app/Activity;)V', "A15 calls the v0.8 overlay step"),
         (HELPER_DST, 'invoke-static {}, LX/TTrueReelHelper;->A1B()V', "overlay restore wired into A00/A10"),
@@ -545,6 +577,42 @@ def main():
         (TABBAR_SETTER, "0x7f0600a9", "0bQ.A04 uses bds_transparent resource"),
         (TABBAR_ICON, "0bI.A0B -> white-icons-while-reels", "0bI.A0B gate present"),
         (TABBAR_ICON, "Ljava/lang/Integer;->valueOf(I)Ljava/lang/Integer;", "0bI.A0B boxes normal color"),
+        # ---- v0.9 (phase 8): TikTok-style horizontal fullscreen ----
+        (CLICK_DST, ".class public LX/TTrueReelClick;", "v0.9 click listener class present"),
+        (CLICK_DST, "implements Landroid/view/View$OnClickListener;", "v0.9 click implements OnClickListener"),
+        (CLICK_DST, "TTrueReelHelper;->A24()V", "v0.9 click -> enter landscape"),
+        (CLICK_DST, "TTrueReelHelper;->A26()V", "v0.9 click -> exit landscape"),
+        (RECHECK_DST, ".class public LX/TTrueReelRecheck;", "v0.9 recheck listener class present"),
+        (RECHECK_DST, "implements Landroid/view/ViewTreeObserver$OnGlobalLayoutListener;", "v0.9 recheck implements layout listener"),
+        (RECHECK_DST, "TTrueReelHelper;->A20(Landroid/app/Activity;)V", "v0.9 recheck -> fullscreen orchestrator"),
+        (HELPER_DST, ".method public static A20(Landroid/app/Activity;)V", "v0.9 fullscreen orchestrator present"),
+        (HELPER_DST, ".method public static A21(Landroid/view/View;I)V", "v0.9 TextureView DFS present"),
+        (HELPER_DST, ".method public static A22(Landroid/app/Activity;)V", "v0.9 pill factory present"),
+        (HELPER_DST, ".method public static A23(Landroid/app/Activity;Landroid/view/View;)V", "v0.9 pill positioner present"),
+        (HELPER_DST, ".method public static A24()V", "v0.9 landscape enter present"),
+        (HELPER_DST, ".method public static A25(Landroid/app/Activity;)V", "v0.9 exit-button factory present"),
+        (HELPER_DST, ".method public static A26()V", "v0.9 landscape exit present"),
+        (HELPER_DST, ".method public static A27()V", "v0.9 fullscreen cleanup present"),
+        (HELPER_DST, "fsPill:Landroid/view/View;", "v0.9 pill field present"),
+        (HELPER_DST, "fsExit:Landroid/view/View;", "v0.9 exit-button field present"),
+        (HELPER_DST, "fsForced:Z", "v0.9 forced-orientation flag present"),
+        (HELPER_DST, "fsListener:Landroid/view/ViewTreeObserver$OnGlobalLayoutListener;", "v0.9 layout-listener field present"),
+        (HELPER_DST, "fsBest:Landroid/view/View;", "v0.9 DFS best field present"),
+        (HELPER_DST, "fsBestArea:I", "v0.9 DFS best-area field present"),
+        (HELPER_DST, "instance-of v0, p0, Landroid/view/TextureView;", "v0.9 video-surface detection uses TextureView"),
+        (HELPER_DST, "Landroid/app/Activity;->setRequestedOrientation(I)V", "v0.9 rotates the host activity"),
+        (HELPER_DST, "Landroid/widget/FrameLayout$LayoutParams;-><init>(III)V", "v0.9 builds FrameLayout LayoutParams"),
+        (HELPER_DST, "Landroid/graphics/drawable/GradientDrawable;->setCornerRadius(F)V", "v0.9 pill rounded background"),
+        (HELPER_DST, "Landroid/view/ViewTreeObserver;->addOnGlobalLayoutListener(Landroid/view/ViewTreeObserver$OnGlobalLayoutListener;)V", "v0.9 listener attach present"),
+        (HELPER_DST, "Landroid/view/ViewTreeObserver;->removeOnGlobalLayoutListener(Landroid/view/ViewTreeObserver$OnGlobalLayoutListener;)V", "v0.9 listener detach present"),
+        (HELPER_DST, "v0.9 fs: landscape engaged", "v0.9 enter-landscape log present"),
+        (HELPER_DST, "v0.9 fs: back to portrait", "v0.9 exit-landscape log present"),
+        (HELPER_DST, "v0.9 fs: pill created", "v0.9 pill-created log present"),
+        (HELPER_DST, "v0.9 fs cleanup: exception", "v0.9 cleanup exception log present"),
+        (HELPER_DST, "v0.9 fs: exception (recovered)", "v0.9 orchestrator exception log present"),
+        (HELPER_DST, "invoke-static {}, LX/TTrueReelHelper;->A27()V", "v0.9 cleanup wired into A01"),
+        (HELPER_DST, "invoke-static {p0}, LX/TTrueReelHelper;->A20(Landroid/app/Activity;)V", "v0.9 orchestrator wired into A15"),
+        (HELPER_DST, "invoke-direct {v0}, LX/TTrueReelRecheck;-><init>()V", "v0.9 listener constructed in A05"),
     ]
     for path, needle, label in checks:
         if needle in read(path):
@@ -572,7 +640,7 @@ def main():
 
 
 def finish():
-    print("InstaTrueReel patch report (v8)")
+    print("InstaTrueReel patch report (v9)")
     print("===============================")
     for line in report:
         print(line)
@@ -611,6 +679,13 @@ def finish():
     print("          exit (A1B via A10) and on fresh entry (A00). Inert on the")
     print("          reels tab (no strip gap). This is THE comment-bar fix for")
     print("          home-feed, Watch History and Likes entries.")
+    print()
+    print("        + HORIZONTAL FULLSCREEN (v0.9): TikTok-style - a Full screen pill")
+    print("          floats under landscape videos (any entry point); tap -> the app")
+    print("          rotates sensor-landscape WITHOUT activity recreation (manifest")
+    print("          configChanges verified), the comment strip hides and the video")
+    print("          fills the screen; an x exit circle returns to portrait.")
+    print("          Event-driven detection (layout listener), zero timers.")
 
 
 if __name__ == "__main__":

@@ -653,3 +653,42 @@ Open items for v0.9 (if needed): if Watch History / Likes show
 "v0.8: video container not found (DFS)" or "video parent not a
 LinearLayout" in logcat, capture `adb logcat -s InstaTrueReel` — the
 v0.8 lines will name the exact divergence of the ModalActivity tree.
+
+## Phase 8 — v0.9.0-phase8: TikTok-style horizontal fullscreen (SHIPPED)
+
+**Goal:** TikTok's "Full screen" experience for landscape (16:9-ish) reels: a
+"Full screen" pill floats in the letterbox bar under a landscape video; tapping
+it rotates the whole app to landscape (TikTok rotates the entire app + swaps
+the player UI); tapping the "x" exit circle returns to portrait.
+
+**Research findings (2026-09-14, sandbox smali analysis of the base APK):**
+- InstagramMainActivity (MainTabActivity target): screenOrientation=14 (LOCKED),
+  configChanges=0xDA0 -> orientation|screenSize|screenLayout|smallestScreenSize
+  all present -> rotation relayouts WITHOUT activity recreation.
+- ModalActivity (Watch History / Likes host): screenOrientation="3" (BEHIND),
+  configChanges=0xDB0 -> same: no recreation on rotation.
+- Full-app sweep of all 21 dexes: only 11 classes ever call
+  setRequestedOrientation (cloud-gaming controllers, signed-out/bloks/order
+  activities) - ZERO in the clips dexes (classes16/classes17) and ZERO in
+  InstagramMainActivity/ModalActivity -> nothing fights our rotation.
+- 9Wz (ClipsViewerFragment) has a real onConfigurationChanged handler that
+  re-reads screen dims (built for tablets) - safe under rotation.
+- TikTok reference (user screenshots): pill = "Full screen" 60% black rounded,
+  sits in the letterbox bar under the video; landscape player = edge-to-edge
+  video, top info bar, center play/pause, bottom scrubber + actions.
+
+**Implementation (v0.9):** A20-A27 + fs* fields + TTrueReelClick +
+TTrueReelRecheck. Detection: largest TextureView under the fragment view,
+landscape iff w > 1.25*h (event-driven via ViewTreeObserver - no timers).
+Enter: setRequestedOrientation(SENSOR_LANDSCAPE=6) + strip GONE (video gets
+the full height via the v0.8 reassert engine re-run) + exit circle top-left.
+Exit / reels-exit: PORTRAIT(1) + strip VISIBLE + full cleanup (A27).
+
+**Lag watch (user reports slight lag):** the reapply engine is bounded (5
+ticks per entry, 100-5000ms) - not periodic; v0.9 adds only event-driven
+layout checks. Suspected cause: 4K feed software decode. If lag persists, a
+future phase can make the reapply engine single-shot after settle.
+
+**Phase 9 candidates:** dedicated landscape player UI (scrubber, timestamps,
+speed, CC), auto-exit on swipe, action-rail hiding, icon drawable fallback
+for the pill glyph.

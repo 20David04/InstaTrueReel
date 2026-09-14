@@ -34,6 +34,12 @@
 .field public static A0T:Z                                     # v0.8: overlay applied flag
 .field public static A0U:I                                     # v0.8: strip height (px)
 .field public static A0V:Z                                     # v0.8: video weight saved flag
+.field public static fsPill:Landroid/view/View;                # v0.9: "Full screen" pill (decor overlay)
+.field public static fsExit:Landroid/view/View;                # v0.9: landscape exit button (decor overlay)
+.field public static fsForced:Z                                # v0.9: landscape orientation currently forced
+.field public static fsListener:Landroid/view/ViewTreeObserver$OnGlobalLayoutListener;  # v0.9: re-check listener
+.field public static fsBest:Landroid/view/View;                # v0.9: DFS best (largest) video surface
+.field public static fsBestArea:I                              # v0.9: DFS best area (px^2)
 
 
 # direct methods
@@ -117,7 +123,7 @@
     invoke-virtual {p0}, Landroidx/fragment/app/Fragment;->getActivity()Landroidx/fragment/app/FragmentActivity;
     move-result-object v0
     if-eqz v0, :cond_no_toast
-    const-string v1, "InstaTrueReel v0.8: strip-overlay ON"
+    const-string v1, "InstaTrueReel v0.9: fullscreen ON"
     const/4 v2, 0x0
     invoke-static {v0, v1, v2}, Landroid/widget/Toast;->makeText(Landroid/content/Context;Ljava/lang/CharSequence;I)Landroid/widget/Toast;
     move-result-object v0
@@ -125,7 +131,7 @@
     :cond_no_toast
 
     const-string v1, "InstaTrueReel"
-    const-string v2, "v0.8 apply: edge-to-edge engaged (fresh entry)"
+    const-string v2, "v0.9 apply: edge-to-edge + fullscreen armed"
     invoke-static {v1, v2}, Landroid/util/Log;->e(Ljava/lang/String;Ljava/lang/String;)I
 
     :cond_active
@@ -161,6 +167,9 @@
     # ---- deactivate interceptors FIRST ----
     const/4 v0, 0x0
     sput-boolean v0, LX/TTrueReelHelper;->A05:Z
+
+    # ---- v0.9: fullscreen cleanup (orientation + buttons + listener) ----
+    invoke-static {}, LX/TTrueReelHelper;->A27()V
 
     # ---- cancel pending re-applies ----
     sget-object v0, LX/TTrueReelHelper;->A07:Landroid/os/Handler;
@@ -226,7 +235,7 @@
     invoke-virtual {v1}, Landroid/view/View;->requestApplyInsets()V
 
     const-string v2, "InstaTrueReel"
-    const-string v3, "v0.8 restore: window chrome + layout restored"
+    const-string v3, "v0.9 restore: window chrome + layout restored"
     invoke-static {v2, v3}, Landroid/util/Log;->e(Ljava/lang/String;Ljava/lang/String;)I
 
     :cond_reset
@@ -308,6 +317,22 @@
     .locals 4
 
     :try_start_0
+    # ---- v0.9: attach the fullscreen re-check listener (idempotent) ----
+    sget-object v0, LX/TTrueReelHelper;->fsListener:Landroid/view/ViewTreeObserver$OnGlobalLayoutListener;
+    if-nez v0, :cond_no_attach
+    sget-object v0, LX/TTrueReelHelper;->A0F:Landroidx/fragment/app/Fragment;
+    if-eqz v0, :cond_no_attach
+    invoke-virtual {v0}, Landroidx/fragment/app/Fragment;->getView()Landroid/view/View;
+    move-result-object v1
+    if-eqz v1, :cond_no_attach
+    invoke-virtual {v1}, Landroid/view/View;->getViewTreeObserver()Landroid/view/ViewTreeObserver;
+    move-result-object v2
+    if-eqz v2, :cond_no_attach
+    new-instance v0, LX/TTrueReelRecheck;
+    invoke-direct {v0}, LX/TTrueReelRecheck;-><init>()V
+    sput-object v0, LX/TTrueReelHelper;->fsListener:Landroid/view/ViewTreeObserver$OnGlobalLayoutListener;
+    invoke-virtual {v2, v0}, Landroid/view/ViewTreeObserver;->addOnGlobalLayoutListener(Landroid/view/ViewTreeObserver$OnGlobalLayoutListener;)V
+    :cond_no_attach
     sget-object v0, LX/TTrueReelHelper;->A07:Landroid/os/Handler;
     if-nez v0, :cond_have_handler
     invoke-static {}, Landroid/os/Looper;->getMainLooper()Landroid/os/Looper;
@@ -742,6 +767,9 @@
 
     # ---- v0.8: comment-strip overlay (bottom bar -> floating overlay) ----
     invoke-static {p0}, LX/TTrueReelHelper;->A19(Landroid/app/Activity;)V
+
+    # ---- v0.9: TikTok-style fullscreen orchestrator (pill / landscape state) ----
+    invoke-static {p0}, LX/TTrueReelHelper;->A20(Landroid/app/Activity;)V
 
     :cond_done
     :try_end_0
@@ -2091,6 +2119,630 @@
     move-exception v0
     const-string v1, "InstaTrueReel"
     const-string v2, "v0.8 overlay: exception (recovered)"
+    invoke-static {v1, v2, v0}, Landroid/util/Log;->e(Ljava/lang/String;Ljava/lang/String;Ljava/lang/Throwable;)I
+    return-void
+.end method
+
+# ============================================================================
+# v0.9 (phase 8) — TIKTOK-STYLE HORIZONTAL FULLSCREEN
+#
+# Research (base APK v435.0.0.37.76, all 21 dexes disassembled in sandbox):
+#   * InstagramMainActivity (MainTabActivity alias target) declares
+#     android:screenOrientation="14" (LOCKED) but configChanges=0xDA0 which
+#     INCLUDES orientation|screenSize|screenLayout|smallestScreenSize — a
+#     runtime setRequestedOrientation() relayouts WITHOUT recreating it.
+#   * ModalActivity (Watch History / Likes host): screenOrientation="3" (BEHIND),
+#     configChanges=0xDB0 — same no-recreation guarantee.
+#   * Full-app sweep: only 11 classes ever call setRequestedOrientation and
+#     NONE of them live in the clips dexes (classes16/classes17) or in the two
+#     host activities — nothing fights our rotation.
+#   * 9Wz (ClipsViewerFragment) has a real onConfigurationChanged that re-reads
+#     screen dimensions (tablet-ready) — safe under rotation.
+#
+# UX (mirrors TikTok, per reference screenshots):
+#   * portrait + landscape video: "⛶ Full screen" pill (60% black rounded,
+#     bold white) floats in the letterbox bar UNDER the video frame.
+#   * tap pill: whole app rotates (SENSOR_LANDSCAPE=6), comment strip hides,
+#     video fills the screen edge-to-edge, "×" exit circle floats top-left.
+#   * tap × (or leaving reels): PORTRAIT(1), strip visible again, cleanup.
+# ============================================================================
+
+# A20(Landroid/app/Activity;)V == v0.9 fullscreen ORCHESTRATOR. Called at the
+# end of every A15 pass (re-apply ticks + fresh entry) and from the
+# TTrueReelRecheck layout listener. Portrait: find the video surface (largest
+# TextureView under the fragment view); if it is LANDSCAPE (w > 1.25 * h),
+# ensure + position the "Full screen" pill; otherwise hide it. Landscape
+# (fsForced): keep the exit button alive, keep the pill hidden.
+.method public static A20(Landroid/app/Activity;)V
+    .locals 6
+
+    :try_start_0
+    sget-boolean v0, LX/TTrueReelHelper;->A05:Z
+    if-eqz v0, :cond_done
+
+    # ---- landscape mode: keep the exit button, hide the pill ----
+    sget-boolean v0, LX/TTrueReelHelper;->fsForced:Z
+    if-eqz v0, :portrait_check
+    invoke-static {p0}, LX/TTrueReelHelper;->A25(Landroid/app/Activity;)V
+    sget-object v0, LX/TTrueReelHelper;->fsPill:Landroid/view/View;
+    if-eqz v0, :cond_done
+    const/16 v1, 0x8
+    invoke-virtual {v0, v1}, Landroid/view/View;->setVisibility(I)V
+    return-void
+
+    :portrait_check
+    # ---- locate the fragment view ----
+    sget-object v0, LX/TTrueReelHelper;->A0F:Landroidx/fragment/app/Fragment;
+    if-eqz v0, :hide_pill
+    invoke-virtual {v0}, Landroidx/fragment/app/Fragment;->getView()Landroid/view/View;
+    move-result-object v0
+    if-eqz v0, :hide_pill
+
+    # ---- find the largest video surface (TextureView) ----
+    const/4 v1, 0x0
+    sput-object v1, LX/TTrueReelHelper;->fsBest:Landroid/view/View;
+    const/4 v1, -0x1
+    sput v1, LX/TTrueReelHelper;->fsBestArea:I
+    const/4 v1, 0x0
+    invoke-static {v0, v1}, LX/TTrueReelHelper;->A21(Landroid/view/View;I)V
+    sget-object v2, LX/TTrueReelHelper;->fsBest:Landroid/view/View;
+    if-eqz v2, :hide_pill
+
+    # ---- needs a laid-out surface ----
+    invoke-virtual {v2}, Landroid/view/View;->getHeight()I
+    move-result v3
+    const/16 v0, 0x28
+    if-lt v3, v0, :hide_pill
+
+    # ---- landscape video iff width > height * 1.25 ----
+    invoke-virtual {v2}, Landroid/view/View;->getWidth()I
+    move-result v0
+    int-to-float v0, v0
+    int-to-float v1, v3
+    const/high16 v4, 0x3fa00000    # 1.25f
+    mul-float/2addr v1, v4
+    cmpl-float v0, v0, v1
+    if-lez v0, :hide_pill
+
+    # ---- show + position the pill in the letterbox bar ----
+    invoke-static {p0, v2}, LX/TTrueReelHelper;->A23(Landroid/app/Activity;Landroid/view/View;)V
+    return-void
+
+    :hide_pill
+    sget-object v0, LX/TTrueReelHelper;->fsPill:Landroid/view/View;
+    if-eqz v0, :cond_done
+    const/16 v1, 0x8
+    invoke-virtual {v0, v1}, Landroid/view/View;->setVisibility(I)V
+
+    :cond_done
+    :try_end_0
+    .catch Ljava/lang/Throwable; {:try_start_0 .. :try_end_0} :catch_0
+
+    return-void
+
+    :catch_0
+    move-exception v0
+    const-string v1, "InstaTrueReel"
+    const-string v2, "v0.9 fs: exception (recovered)"
+    invoke-static {v1, v2, v0}, Landroid/util/Log;->e(Ljava/lang/String;Ljava/lang/String;Ljava/lang/Throwable;)I
+    return-void
+.end method
+
+
+# A21(Landroid/view/View;I)V == v0.9 bounded DFS: track the LARGEST TextureView
+# (the reels video surface) under p0 into fsBest/fsBestArea. Depth cap 20.
+.method public static A21(Landroid/view/View;I)V
+    .locals 5
+
+    :try_start_0
+    if-eqz p0, :ret
+    const/16 v0, 0x14
+    if-gt p1, v0, :ret
+
+    instance-of v0, p0, Landroid/view/TextureView;
+    if-eqz v0, :not_surface
+
+    invoke-virtual {p0}, Landroid/view/View;->getWidth()I
+    move-result v1
+    invoke-virtual {p0}, Landroid/view/View;->getHeight()I
+    move-result v2
+    mul-int v3, v1, v2
+    sget v0, LX/TTrueReelHelper;->fsBestArea:I
+    if-le v3, v0, :ret
+    sput v3, LX/TTrueReelHelper;->fsBestArea:I
+    sput-object p0, LX/TTrueReelHelper;->fsBest:Landroid/view/View;
+    return-void
+
+    :not_surface
+    instance-of v0, p0, Landroid/view/ViewGroup;
+    if-eqz v0, :ret
+    check-cast p0, Landroid/view/ViewGroup;
+    invoke-virtual {p0}, Landroid/view/ViewGroup;->getChildCount()I
+    move-result v1
+    const/4 v2, 0x0
+    :loop_head
+    if-ge v2, v1, :loop_end
+    invoke-virtual {p0, v2}, Landroid/view/ViewGroup;->getChildAt(I)Landroid/view/View;
+    move-result-object v3
+    if-eqz v3, :loop_next
+    add-int/lit8 v4, p1, 0x1
+    invoke-static {v3, v4}, LX/TTrueReelHelper;->A21(Landroid/view/View;I)V
+    :loop_next
+    add-int/lit8 v2, v2, 0x1
+    goto :loop_head
+
+    :loop_end
+    :ret
+    :try_end_0
+    .catch Ljava/lang/Throwable; {:try_start_0 .. :try_end_0} :catch_0
+
+    return-void
+
+    :catch_0
+    move-exception v0
+    return-void
+.end method
+
+
+# A22(Landroid/app/Activity;)V == v0.9 create the TikTok-style "Full screen"
+# pill (semi-transparent dark rounded pill, bold white "⛶ Full screen"), owned
+# by the window decor. Positioning happens in A23; this only builds + adds it.
+.method public static A22(Landroid/app/Activity;)V
+    .locals 6
+
+    :try_start_0
+    sget-object v0, LX/TTrueReelHelper;->fsPill:Landroid/view/View;
+    if-nez v0, :cond_done
+
+    invoke-virtual {p0}, Landroid/app/Activity;->getWindow()Landroid/view/Window;
+    move-result-object v0
+    if-eqz v0, :cond_done
+    invoke-virtual {v0}, Landroid/view/Window;->getDecorView()Landroid/view/View;
+    move-result-object v1
+    if-eqz v1, :cond_done
+    check-cast v1, Landroid/view/ViewGroup;
+
+    # ---- density (kept in v5 while building) ----
+    invoke-virtual {p0}, Landroid/app/Activity;->getResources()Landroid/content/res/Resources;
+    move-result-object v2
+    invoke-virtual {v2}, Landroid/content/res/Resources;->getDisplayMetrics()Landroid/util/DisplayMetrics;
+    move-result-object v2
+    iget v5, v2, Landroid/util/DisplayMetrics;->density:F
+
+    # ---- the pill text ----
+    new-instance v2, Landroid/widget/TextView;
+    invoke-direct {v2, p0}, Landroid/widget/TextView;-><init>(Landroid/content/Context;)V
+    const-string v3, "⛶  Full screen"
+    invoke-virtual {v2, v3}, Landroid/widget/TextView;->setText(Ljava/lang/CharSequence;)V
+    const v3, -0x1
+    invoke-virtual {v2, v3}, Landroid/widget/TextView;->setTextColor(I)V
+    const/high16 v3, 0x41600000
+    invoke-virtual {v2, v3}, Landroid/widget/TextView;->setTextSize(F)V
+    sget-object v3, Landroid/graphics/Typeface;->DEFAULT_BOLD:Landroid/graphics/Typeface;
+    invoke-virtual {v2, v3}, Landroid/widget/TextView;->setTypeface(Landroid/graphics/Typeface;)V
+
+    # ---- padding: 16dp horizontal, 8dp vertical ----
+    const/high16 v3, 0x41800000
+    mul-float/2addr v3, v5
+    float-to-int v3, v3
+    const/high16 v4, 0x41000000
+    mul-float/2addr v4, v5
+    float-to-int v4, v4
+    invoke-virtual {v2, v3, v4, v3, v4}, Landroid/view/View;->setPadding(IIII)V
+
+    # ---- pill background: rounded rect, 60% black ----
+    new-instance v3, Landroid/graphics/drawable/GradientDrawable;
+    invoke-direct {v3}, Landroid/graphics/drawable/GradientDrawable;-><init>()V
+    const/4 v4, 0x0
+    invoke-virtual {v3, v4}, Landroid/graphics/drawable/GradientDrawable;->setShape(I)V
+    const/high16 v4, 0x447a0000
+    invoke-virtual {v3, v4}, Landroid/graphics/drawable/GradientDrawable;->setCornerRadius(F)V
+    const v4, -0x67000000
+    invoke-virtual {v3, v4}, Landroid/graphics/drawable/GradientDrawable;->setColor(I)V
+    invoke-virtual {v2, v3}, Landroid/view/View;->setBackground(Landroid/graphics/drawable/Drawable;)V
+
+    # ---- click -> enter landscape ----
+    new-instance v3, LX/TTrueReelClick;
+    const/4 v4, 0x0
+    invoke-direct {v3, v4}, LX/TTrueReelClick;-><init>(I)V
+    invoke-virtual {v2, v3}, Landroid/view/View;->setOnClickListener(Landroid/view/View$OnClickListener;)V
+
+    # ---- decor attach: bottom-center, lifted by bottomMargin (A23 sets it) ----
+    new-instance v3, Landroid/widget/FrameLayout$LayoutParams;
+    const/4 v4, -0x2
+    const/4 v5, -0x2
+    const/16 v0, 0x51
+    invoke-direct {v3, v4, v5, v0}, Landroid/widget/FrameLayout$LayoutParams;-><init>(III)V
+    const/16 v0, 0x30
+    iput v0, v3, Landroid/view/ViewGroup$MarginLayoutParams;->bottomMargin:I
+    invoke-virtual {v1, v2, v3}, Landroid/view/ViewGroup;->addView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V
+
+    sput-object v2, LX/TTrueReelHelper;->fsPill:Landroid/view/View;
+
+    const-string v0, "InstaTrueReel"
+    const-string v1, "v0.9 fs: pill created (landscape video detected)"
+    invoke-static {v0, v1}, Landroid/util/Log;->e(Ljava/lang/String;Ljava/lang/String;)I
+
+    :cond_done
+    :try_end_0
+    .catch Ljava/lang/Throwable; {:try_start_0 .. :try_end_0} :catch_0
+
+    return-void
+
+    :catch_0
+    move-exception v0
+    const-string v1, "InstaTrueReel"
+    const-string v2, "v0.9 fs pill: exception (recovered)"
+    invoke-static {v1, v2, v0}, Landroid/util/Log;->e(Ljava/lang/String;Ljava/lang/String;Ljava/lang/Throwable;)I
+    return-void
+.end method
+
+
+# A23(Landroid/app/Activity;Landroid/view/View;)V == v0.9 ensure + position the
+# pill in the letterbox bar under the landscape video (TikTok placement).
+# p1 = video surface. bottomMargin = max(letterboxBar/2, stripH + 16dp).
+.method public static A23(Landroid/app/Activity;Landroid/view/View;)V
+    .locals 8
+
+    :try_start_0
+    invoke-static {p0}, LX/TTrueReelHelper;->A22(Landroid/app/Activity;)V
+    sget-object v0, LX/TTrueReelHelper;->fsPill:Landroid/view/View;
+    if-eqz v0, :cond_done
+
+    # ---- decor height ----
+    invoke-virtual {p0}, Landroid/app/Activity;->getWindow()Landroid/view/Window;
+    move-result-object v2
+    if-eqz v2, :show_only
+    invoke-virtual {v2}, Landroid/view/Window;->getDecorView()Landroid/view/View;
+    move-result-object v2
+    if-eqz v2, :show_only
+    invoke-virtual {v2}, Landroid/view/View;->getHeight()I
+    move-result v3
+
+    # ---- video bottom in screen coords ----
+    const/4 v4, 0x2
+    new-array v4, v4, [I
+    invoke-virtual {p1, v4}, Landroid/view/View;->getLocationOnScreen([I)V
+    const/4 v5, 0x1
+    aget v5, v4, v5
+    invoke-virtual {p1}, Landroid/view/View;->getHeight()I
+    move-result v6
+    add-int/2addr v5, v6
+    sub-int v5, v3, v5          # letterbox bar height under the video
+    if-gez v5, :bar_ok
+    const/4 v5, 0x0
+    :bar_ok
+    div-int/lit8 v5, v5, 0x2
+
+    # ---- guard: strip height + 16dp (or plain 16dp on the reels tab) ----
+    invoke-virtual {p0}, Landroid/app/Activity;->getResources()Landroid/content/res/Resources;
+    move-result-object v7
+    invoke-virtual {v7}, Landroid/content/res/Resources;->getDisplayMetrics()Landroid/util/DisplayMetrics;
+    move-result-object v7
+    iget v7, v7, Landroid/util/DisplayMetrics;->density:F
+    const/high16 v4, 0x41800000
+    mul-float/2addr v4, v7
+    float-to-int v4, v4
+    sget v6, LX/TTrueReelHelper;->A0U:I
+    if-lez v6, :no_strip_guard
+    add-int/2addr v6, v4
+    goto :guard_done
+    :no_strip_guard
+    move v6, v4
+    :guard_done
+    if-ge v5, v6, :set_margin
+    move v5, v6
+    :set_margin
+    invoke-virtual {v0}, Landroid/view/View;->getLayoutParams()Landroid/view/ViewGroup$LayoutParams;
+    move-result-object v4
+    if-eqz v4, :show_only
+    check-cast v4, Landroid/widget/FrameLayout$LayoutParams;
+    iput v5, v4, Landroid/view/ViewGroup$MarginLayoutParams;->bottomMargin:I
+    invoke-virtual {v0}, Landroid/view/View;->requestLayout()V
+
+    :show_only
+    const/4 v4, 0x0
+    invoke-virtual {v0, v4}, Landroid/view/View;->setVisibility(I)V
+
+    :cond_done
+    :try_end_0
+    .catch Ljava/lang/Throwable; {:try_start_0 .. :try_end_0} :catch_0
+
+    return-void
+
+    :catch_0
+    move-exception v0
+    const-string v1, "InstaTrueReel"
+    const-string v2, "v0.9 fs pos: exception (recovered)"
+    invoke-static {v1, v2, v0}, Landroid/util/Log;->e(Ljava/lang/String;Ljava/lang/String;Ljava/lang/Throwable;)I
+    return-void
+.end method
+
+
+# A24()V == v0.9 ENTER TikTok-style landscape fullscreen: force SENSOR_LANDSCAPE
+# (6), hide the pill + the comment strip (video claims the full height via the
+# v0.8 reassert engine), show the exit button, re-run the layout engine.
+.method public static A24()V
+    .locals 3
+
+    :try_start_0
+    sget-boolean v0, LX/TTrueReelHelper;->A05:Z
+    if-eqz v0, :cond_done
+    sget-object v0, LX/TTrueReelHelper;->A09:Landroid/app/Activity;
+    if-eqz v0, :cond_done
+
+    const/4 v1, 0x1
+    sput-boolean v1, LX/TTrueReelHelper;->fsForced:Z
+
+    # ---- rotate: SCREEN_ORIENTATION_SENSOR_LANDSCAPE ----
+    const/4 v1, 0x6
+    invoke-virtual {v0, v1}, Landroid/app/Activity;->setRequestedOrientation(I)V
+
+    # ---- hide the pill ----
+    sget-object v1, LX/TTrueReelHelper;->fsPill:Landroid/view/View;
+    if-eqz v1, :no_pill
+    const/16 v2, 0x8
+    invoke-virtual {v1, v2}, Landroid/view/View;->setVisibility(I)V
+    :no_pill
+
+    # ---- show the exit button ----
+    invoke-static {v0}, LX/TTrueReelHelper;->A25(Landroid/app/Activity;)V
+
+    # ---- hide the comment strip ----
+    sget-object v1, LX/TTrueReelHelper;->A0O:Landroid/view/View;
+    if-eqz v1, :no_strip
+    const/16 v2, 0x8
+    invoke-virtual {v1, v2}, Landroid/view/View;->setVisibility(I)V
+    :no_strip
+
+    # ---- re-run the layout engine for the new configuration ----
+    invoke-static {}, LX/TTrueReelHelper;->A05()V
+
+    const-string v1, "InstaTrueReel"
+    const-string v2, "v0.9 fs: landscape engaged"
+    invoke-static {v1, v2}, Landroid/util/Log;->e(Ljava/lang/String;Ljava/lang/String;)I
+
+    :cond_done
+    :try_end_0
+    .catch Ljava/lang/Throwable; {:try_start_0 .. :try_end_0} :catch_0
+
+    return-void
+
+    :catch_0
+    move-exception v0
+    const-string v1, "InstaTrueReel"
+    const-string v2, "v0.9 fs enter: exception (recovered)"
+    invoke-static {v1, v2, v0}, Landroid/util/Log;->e(Ljava/lang/String;Ljava/lang/String;Ljava/lang/Throwable;)I
+    return-void
+.end method
+
+
+# A25(Landroid/app/Activity;)V == v0.9 create the landscape EXIT button
+# (semi-transparent dark circle, white "×", top-left of the decor).
+.method public static A25(Landroid/app/Activity;)V
+    .locals 7
+
+    :try_start_0
+    sget-object v0, LX/TTrueReelHelper;->fsExit:Landroid/view/View;
+    if-nez v0, :cond_done
+
+    invoke-virtual {p0}, Landroid/app/Activity;->getWindow()Landroid/view/Window;
+    move-result-object v0
+    if-eqz v0, :cond_done
+    invoke-virtual {v0}, Landroid/view/Window;->getDecorView()Landroid/view/View;
+    move-result-object v1
+    if-eqz v1, :cond_done
+    check-cast v1, Landroid/view/ViewGroup;
+
+    # ---- density ----
+    invoke-virtual {p0}, Landroid/app/Activity;->getResources()Landroid/content/res/Resources;
+    move-result-object v2
+    invoke-virtual {v2}, Landroid/content/res/Resources;->getDisplayMetrics()Landroid/util/DisplayMetrics;
+    move-result-object v2
+    iget v2, v2, Landroid/util/DisplayMetrics;->density:F
+
+    # ---- build the round "×" button ----
+    new-instance v3, Landroid/widget/TextView;
+    invoke-direct {v3, p0}, Landroid/widget/TextView;-><init>(Landroid/content/Context;)V
+    const-string v4, "×"
+    invoke-virtual {v3, v4}, Landroid/widget/TextView;->setText(Ljava/lang/CharSequence;)V
+    const v4, -0x1
+    invoke-virtual {v3, v4}, Landroid/widget/TextView;->setTextColor(I)V
+    const/high16 v4, 0x41900000
+    invoke-virtual {v3, v4}, Landroid/widget/TextView;->setTextSize(F)V
+
+    # ---- padding: 10dp horizontal, 6dp vertical ----
+    const/high16 v4, 0x41200000
+    mul-float/2addr v4, v2
+    float-to-int v4, v4
+    const/high16 v5, 0x40c00000
+    mul-float/2addr v5, v2
+    float-to-int v5, v5
+    invoke-virtual {v3, v4, v5, v4, v5}, Landroid/view/View;->setPadding(IIII)V
+
+    # ---- circle background: 60% black ----
+    new-instance v4, Landroid/graphics/drawable/GradientDrawable;
+    invoke-direct {v4}, Landroid/graphics/drawable/GradientDrawable;-><init>()V
+    const/4 v5, 0x1
+    invoke-virtual {v4, v5}, Landroid/graphics/drawable/GradientDrawable;->setShape(I)V
+    const v5, -0x67000000
+    invoke-virtual {v4, v5}, Landroid/graphics/drawable/GradientDrawable;->setColor(I)V
+    invoke-virtual {v3, v4}, Landroid/view/View;->setBackground(Landroid/graphics/drawable/Drawable;)V
+
+    # ---- click -> exit landscape ----
+    new-instance v4, LX/TTrueReelClick;
+    const/4 v5, 0x1
+    invoke-direct {v4, v5}, LX/TTrueReelClick;-><init>(I)V
+    invoke-virtual {v3, v4}, Landroid/view/View;->setOnClickListener(Landroid/view/View$OnClickListener;)V
+
+    # ---- decor attach: top-left (24dp top / 16dp left) ----
+    new-instance v4, Landroid/widget/FrameLayout$LayoutParams;
+    const/4 v5, -0x2
+    const/4 v6, -0x2
+    const/16 v0, 0x33
+    invoke-direct {v4, v5, v6, v0}, Landroid/widget/FrameLayout$LayoutParams;-><init>(III)V
+    const/high16 v5, 0x41c00000
+    mul-float/2addr v5, v2
+    float-to-int v5, v5
+    iput v5, v4, Landroid/view/ViewGroup$MarginLayoutParams;->topMargin:I
+    const/high16 v5, 0x41800000
+    mul-float/2addr v5, v2
+    float-to-int v5, v5
+    iput v5, v4, Landroid/view/ViewGroup$MarginLayoutParams;->leftMargin:I
+    invoke-virtual {v1, v3, v4}, Landroid/view/ViewGroup;->addView(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V
+
+    sput-object v3, LX/TTrueReelHelper;->fsExit:Landroid/view/View;
+
+    const-string v0, "InstaTrueReel"
+    const-string v1, "v0.9 fs: exit button created"
+    invoke-static {v0, v1}, Landroid/util/Log;->e(Ljava/lang/String;Ljava/lang/String;)I
+
+    :cond_done
+    :try_end_0
+    .catch Ljava/lang/Throwable; {:try_start_0 .. :try_end_0} :catch_0
+
+    return-void
+
+    :catch_0
+    move-exception v0
+    const-string v1, "InstaTrueReel"
+    const-string v2, "v0.9 fs exit-btn: exception (recovered)"
+    invoke-static {v1, v2, v0}, Landroid/util/Log;->e(Ljava/lang/String;Ljava/lang/String;Ljava/lang/Throwable;)I
+    return-void
+.end method
+
+
+# A26()V == v0.9 EXIT landscape fullscreen: back to portrait (1), remove the
+# exit button, strip visible again, re-run the layout engine.
+.method public static A26()V
+    .locals 3
+
+    :try_start_0
+    sget-object v0, LX/TTrueReelHelper;->A09:Landroid/app/Activity;
+    if-eqz v0, :cond_done
+
+    const/4 v1, 0x1
+    invoke-virtual {v0, v1}, Landroid/app/Activity;->setRequestedOrientation(I)V
+
+    const/4 v1, 0x0
+    sput-boolean v1, LX/TTrueReelHelper;->fsForced:Z
+
+    # ---- remove the exit button ----
+    sget-object v1, LX/TTrueReelHelper;->fsExit:Landroid/view/View;
+    if-eqz v1, :no_exit
+    invoke-virtual {v1}, Landroid/view/View;->getParent()Landroid/view/ViewParent;
+    move-result-object v2
+    if-eqz v2, :no_exit
+    check-cast v2, Landroid/view/ViewGroup;
+    invoke-virtual {v2, v1}, Landroid/view/ViewGroup;->removeView(Landroid/view/View;)V
+    :no_exit
+    const/4 v1, 0x0
+    sput-object v1, LX/TTrueReelHelper;->fsExit:Landroid/view/View;
+
+    # ---- strip back ----
+    sget-object v1, LX/TTrueReelHelper;->A0O:Landroid/view/View;
+    if-eqz v1, :no_strip
+    const/4 v2, 0x0
+    invoke-virtual {v1, v2}, Landroid/view/View;->setVisibility(I)V
+    :no_strip
+
+    # ---- re-run the engine (portrait relayout) ----
+    invoke-static {}, LX/TTrueReelHelper;->A05()V
+
+    const-string v1, "InstaTrueReel"
+    const-string v2, "v0.9 fs: back to portrait"
+    invoke-static {v1, v2}, Landroid/util/Log;->e(Ljava/lang/String;Ljava/lang/String;)I
+
+    :cond_done
+    :try_end_0
+    .catch Ljava/lang/Throwable; {:try_start_0 .. :try_end_0} :catch_0
+
+    return-void
+
+    :catch_0
+    move-exception v0
+    const-string v1, "InstaTrueReel"
+    const-string v2, "v0.9 fs exit: exception (recovered)"
+    invoke-static {v1, v2, v0}, Landroid/util/Log;->e(Ljava/lang/String;Ljava/lang/String;Ljava/lang/Throwable;)I
+    return-void
+.end method
+
+
+# A27()V == v0.9 cleanup on reels exit: remove the layout listener + both
+# buttons, restore portrait orientation if we forced landscape, strip visible.
+.method public static A27()V
+    .locals 3
+
+    :try_start_0
+    # ---- listener off ----
+    sget-object v0, LX/TTrueReelHelper;->fsListener:Landroid/view/ViewTreeObserver$OnGlobalLayoutListener;
+    if-eqz v0, :no_listener
+    sget-object v1, LX/TTrueReelHelper;->A0F:Landroidx/fragment/app/Fragment;
+    if-eqz v1, :drop_listener
+    invoke-virtual {v1}, Landroidx/fragment/app/Fragment;->getView()Landroid/view/View;
+    move-result-object v1
+    if-eqz v1, :drop_listener
+    invoke-virtual {v1}, Landroid/view/View;->getViewTreeObserver()Landroid/view/ViewTreeObserver;
+    move-result-object v2
+    if-eqz v2, :drop_listener
+    invoke-virtual {v2, v0}, Landroid/view/ViewTreeObserver;->removeOnGlobalLayoutListener(Landroid/view/ViewTreeObserver$OnGlobalLayoutListener;)V
+    :drop_listener
+    const/4 v1, 0x0
+    sput-object v1, LX/TTrueReelHelper;->fsListener:Landroid/view/ViewTreeObserver$OnGlobalLayoutListener;
+    :no_listener
+
+    # ---- portrait back if we forced it ----
+    sget-boolean v0, LX/TTrueReelHelper;->fsForced:Z
+    if-eqz v0, :no_orientation
+    sget-object v0, LX/TTrueReelHelper;->A09:Landroid/app/Activity;
+    if-eqz v0, :no_orientation
+    const/4 v1, 0x1
+    invoke-virtual {v0, v1}, Landroid/app/Activity;->setRequestedOrientation(I)V
+    const/4 v1, 0x0
+    sput-boolean v1, LX/TTrueReelHelper;->fsForced:Z
+    sget-object v1, LX/TTrueReelHelper;->A0O:Landroid/view/View;
+    if-eqz v1, :no_orientation
+    const/4 v2, 0x0
+    invoke-virtual {v1, v2}, Landroid/view/View;->setVisibility(I)V
+    :no_orientation
+
+    # ---- remove the pill ----
+    sget-object v0, LX/TTrueReelHelper;->fsPill:Landroid/view/View;
+    if-eqz v0, :no_pill
+    invoke-virtual {v0}, Landroid/view/View;->getParent()Landroid/view/ViewParent;
+    move-result-object v1
+    if-eqz v1, :no_pill
+    check-cast v1, Landroid/view/ViewGroup;
+    invoke-virtual {v1, v0}, Landroid/view/ViewGroup;->removeView(Landroid/view/View;)V
+    :no_pill
+    const/4 v0, 0x0
+    sput-object v0, LX/TTrueReelHelper;->fsPill:Landroid/view/View;
+
+    # ---- remove the exit button ----
+    sget-object v0, LX/TTrueReelHelper;->fsExit:Landroid/view/View;
+    if-eqz v0, :no_exit
+    invoke-virtual {v0}, Landroid/view/View;->getParent()Landroid/view/ViewParent;
+    move-result-object v1
+    if-eqz v1, :no_exit
+    check-cast v1, Landroid/view/ViewGroup;
+    invoke-virtual {v1, v0}, Landroid/view/ViewGroup;->removeView(Landroid/view/View;)V
+    :no_exit
+    const/4 v0, 0x0
+    sput-object v0, LX/TTrueReelHelper;->fsExit:Landroid/view/View;
+    const/4 v0, 0x0
+    sput-object v0, LX/TTrueReelHelper;->fsBest:Landroid/view/View;
+    const/4 v0, -0x1
+    sput v0, LX/TTrueReelHelper;->fsBestArea:I
+
+    :try_end_0
+    .catch Ljava/lang/Throwable; {:try_start_0 .. :try_end_0} :catch_0
+
+    return-void
+
+    :catch_0
+    move-exception v0
+    const-string v1, "InstaTrueReel"
+    const-string v2, "v0.9 fs cleanup: exception (recovered)"
     invoke-static {v1, v2, v0}, Landroid/util/Log;->e(Ljava/lang/String;Ljava/lang/String;Ljava/lang/Throwable;)I
     return-void
 .end method

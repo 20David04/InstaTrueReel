@@ -17,6 +17,8 @@ floating UI. Built entirely with GitHub Actions (decompile → smali patch → r
 | [v0.2.0-phase1.1](https://github.com/Skyro7777777/InstaTrueReel/releases/tag/v0.2.0-phase1.1) | `Instagram-v435.0.0.37.76-InstaTrueReel-signed.apk` | Window-chrome interceptors only (superseded) |
 | [v0.1.0-phase1](https://github.com/Skyro7777777/InstaTrueReel/releases/tag/v0.1.0-phase1) | `Instagram-v435.0.0.37.76-InstaTrueReel-signed.apk` | Initial attempt (superseded) |
 
+- **v0.9 (phase 8): TikTok-style horizontal fullscreen** — a "Full screen" pill appears under landscape videos in any Reels entry; tap it to rotate the whole app into an edge-to-edge landscape player (comment strip hidden, "x" exit top-left).
+
 > **Always grab the newest release (v0.8.0).** The status bar is transparent on every
 > entry point (the v0.6 win holds), and the v0.7 strip dump PROVED the last opaque area
 > — the **comment bar** — is a sibling strip INSIDE the fragment root LinearLayout,
