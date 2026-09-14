@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-InstaTrueReel — smali patcher (v7, Phase 6 — BOTTOM-GAP CLOSURE + STRIP TELEMETRY).
+InstaTrueReel — smali patcher (v8, Phase 7 — STRIP-OVERLAY TRANSFORMATION).
 
 Field state (v0.6 tested on Android 10, 9:16, user log live_log.txt + screenshot
 Screenshot_20260914-150151__01.jpg — pixel-verified):
@@ -58,6 +58,25 @@ Patches (all idempotent, fail loudly, marked with `instatruereel:` comments):
    12. Helper A17/A18: one-shot bottom-strip tree dump (class/id/y/w/h per view).
    13. Helper A10 extended: restores closed heights before the chain restore.
    14. Version strings bumped (toast: "InstaTrueReel v0.7: gap-closure ON").
+
+NEW in v0.8 (strip-overlay transformation - THE comment-bar fix):
+  15. A19/A1A/A1C find the video container (GestureManagerFrameLayout,
+      fallback ClipsSwipeRefreshLayout + climb) INSIDE the fragment - the
+      v0.7 strip dump proved the bound is below the fragment view where no
+      ancestor-walk can reach: video (weighted child) stops 158px short and
+      the opaque IgLinearLayout strip (pill inside) is stacked below it.
+  16. A1E sets video LayoutParams.height = fragment-root height with weight
+      ZEROED (LinearLayout re-measures weighted children to the leftover
+      space - the weight must go or the change is silently undone).
+  17. The strip gets translationY = -stripH (same on-screen position, now
+      floating ON TOP of the full-height video; touch dispatch follows
+      translation so the pill stays tappable) + cleared backgrounds on the
+      strip and its direct children (the rounded pill two levels down keeps
+      its background). TikTok-style: fullscreen video + floating pill.
+  18. A1D saves everything once; A1B restores on exit (wired into A10) and
+      on fresh entry (wired into A00). Inert when no strip exists (reels
+      tab: gap == 0). Idempotent re-assert on every re-apply tick.
+  19. Version strings bumped (toast: "InstaTrueReel v0.8: strip-overlay ON").
 """
 import os
 import re
@@ -295,13 +314,13 @@ def main():
     if errors:
         finish()
 
-    # ---------- 1. install helpers (v0.7) ----------
+    # ---------- 1. install helpers (v0.8 bundle) ----------
     os.makedirs(os.path.dirname(HELPER_DST), exist_ok=True)
     if os.path.isfile(HELPER_DST):
         report.append("  [skip] helper TTrueReelHelper already installed")
     else:
         shutil.copyfile(HELPER_SRC, HELPER_DST)
-        report.append("  [ ok ] helper TTrueReelHelper v0.7 installed -> smali_classes16/X/")
+        report.append("  [ ok ] helper TTrueReelHelper v0.8 installed -> smali_classes16/X/")
 
     if os.path.isfile(REAPPLY_DST):
         report.append("  [skip] helper TTrueReelReapply already installed")
@@ -461,7 +480,7 @@ def main():
         (HELPER_DST, "invoke-direct/range {v2 .. v7}", "helper v0.6 range-invoke arity correct"),
         (HELPER_DST, "0x7f0b3f45", "helper targets swipeable_tab_view_pager"),
         (HELPER_DST, "0x7f0b2246", "helper targets layout_container_main"),
-        (HELPER_DST, 'const-string v1, "InstaTrueReel v0.7: gap-closure ON"', "toast marker v0.7 present"),
+        (HELPER_DST, 'const-string v1, "InstaTrueReel v0.8: strip-overlay ON"', "toast marker v0.8 present"),
         (HELPER_DST, 'v0.6 deblock eval: pager=', "v0.6 deblock eval diagnostics present"),
         (HELPER_DST, 'v0.7 liberate: chain freed (n=', "v0.7 liberation summary log present"),
         (HELPER_DST, 'v0.6 restore-layout: chain restored (n=', "v0.6 chain-restore log present"),
@@ -484,6 +503,26 @@ def main():
         (HELPER_DST, "Landroidx/recyclerview/widget/RecyclerView;", "v0.7 RecyclerView parent check present"),
         (HELPER_DST, "Landroidx/constraintlayout/widget/ConstraintLayout;", "v0.7 ConstraintLayout parent check present"),
         (HELPER_DST, "Landroid/view/ViewGroup$LayoutParams;->height:I", "v0.7 exact-height surgery present"),
+        (HELPER_DST, ".method public static A19(", "helper v0.8 strip-overlay orchestrator present"),
+        (HELPER_DST, ".method public static A1A(", "helper v0.8 DFS GestureManagerFrameLayout finder present"),
+        (HELPER_DST, ".method public static A1B()V", "helper v0.8 overlay restore present"),
+        (HELPER_DST, ".method public static A1C(", "helper v0.8 DFS ClipsSwipeRefreshLayout fallback present"),
+        (HELPER_DST, ".method public static A1D(", "helper v0.8 overlay-state save present"),
+        (HELPER_DST, ".method public static A1E(", "helper v0.8 overlay apply present"),
+        (HELPER_DST, "Lcom/instagram/ui/gesture/GestureManagerFrameLayout;", "v0.8 video-container class check present"),
+        (HELPER_DST, "Linstagram/features/clips/viewer/ui/ClipsSwipeRefreshLayout;", "v0.8 swipe-refresh fallback class present"),
+        (HELPER_DST, "Landroid/widget/LinearLayout$LayoutParams;->weight:F", "v0.8 LinearLayout weight surgery present"),
+        (HELPER_DST, "setTranslationY(F)V", "v0.8 strip translation overlay present"),
+        (HELPER_DST, "A0L:Landroid/view/View;", "v0.8 video container field present"),
+        (HELPER_DST, "A0O:Landroid/view/View;", "v0.8 strip view field present"),
+        (HELPER_DST, "A0T:Z", "v0.8 overlay-applied flag present"),
+        (HELPER_DST, "A0V:Z", "v0.8 weight-saved flag present"),
+        (HELPER_DST, 'v0.8 overlay: ', "v0.8 overlay telemetry log present"),
+        (HELPER_DST, "v0.8 restore: strip overlay reverted", "v0.8 overlay-restore log present"),
+        (HELPER_DST, 'v0.8 apply: edge-to-edge engaged', "v0.8 apply marker present"),
+        (HELPER_DST, "v0.8: video container not found", "v0.8 DFS failure is logged, never silent"),
+        (HELPER_DST, 'invoke-static {p0}, LX/TTrueReelHelper;->A19(Landroid/app/Activity;)V', "A15 calls the v0.8 overlay step"),
+        (HELPER_DST, 'invoke-static {}, LX/TTrueReelHelper;->A1B()V', "overlay restore wired into A00/A10"),
         (HELPER_DST, "WindowManager$LayoutParams", "helper uses correct WindowManager type"),
         (VIEWSAVE_DST, ".class public LX/TTrueReelViewSave;", "viewsave class present"),
         (VIEWSAVE_DST, "A00:Landroid/view/View;", "viewsave holds view ref"),
@@ -533,7 +572,7 @@ def main():
 
 
 def finish():
-    print("InstaTrueReel patch report (v7)")
+    print("InstaTrueReel patch report (v8)")
     print("===============================")
     for line in report:
         print(line)
@@ -561,6 +600,17 @@ def finish():
     print("        + STRIP DUMP (A17/A18): one-shot log of every view in the bottom")
     print("          35% of the screen (class/id/y-range/w/h) — if anything is still")
     print("          bounded, the culprit view is NAMED for a surgical v0.8.")
+    print("        + STRIP OVERLAY (v0.8): the dump named it - inside the fragment")
+    print("          root LinearLayout, the weighted video child stops 158px short")
+    print("          and the opaque strip (pill inside) stacks below it. A19 finds")
+    print("          the video container by DFS (GestureManagerFrameLayout, with a")
+    print("          ClipsSwipeRefreshLayout + climb fallback), sets video height =")
+    print("          root height with weight ZEROED, floats the strip over the")
+    print("          video via translationY=-stripH, and clears the strip + direct")
+    print("          child backgrounds (pill keeps its rounded bg). Restored on")
+    print("          exit (A1B via A10) and on fresh entry (A00). Inert on the")
+    print("          reels tab (no strip gap). This is THE comment-bar fix for")
+    print("          home-feed, Watch History and Likes entries.")
 
 
 if __name__ == "__main__":

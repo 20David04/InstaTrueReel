@@ -10,7 +10,7 @@ on:
       release_tag:
         description: 'Release tag to create/update (asset is uploaded with --clobber)'
         required: false
-        default: 'v0.7.0-phase6'
+        default: 'v0.8.0-phase7'
 
 env:
   APK_FILE: Instagram-v435.0.0.37.76-patches-v3.8.0.apk
@@ -53,7 +53,7 @@ jobs:
           echo "smali files: $(find decoded -name '*.smali' | wc -l)"
           ls -d decoded/smali* | wc -l
 
-      - name: Apply InstaTrueReel patches (v7, bottom-gap closure + strip telemetry)
+      - name: Apply InstaTrueReel patches (v8, strip-overlay transformation)
         run: |
           python3 patches/apply_patches.py decoded 2>&1 | tee patch_report.txt
 
@@ -104,7 +104,7 @@ jobs:
           check('classes16.dex', 'TTrueReelHelper', 'helper class defined')
           check('classes16.dex', 'TTrueReelReapply', 'reapply runnable present')
           check('classes16.dex', 'TTrueReelViewSave', 'v0.6 view-save state class present')
-          check('classes16.dex', 'InstaTrueReel v0.7', 'v0.7 toast marker present')
+          check('classes16.dex', 'InstaTrueReel v0.8', 'v0.8 toast marker present')
           check('classes16.dex', 'v0.7 liberate: ', 'v0.7 liberation + height telemetry present')
           check('classes16.dex', 'v0.7 liberate: chain freed', 'v0.7 liberation summary present')
           check('classes16.dex', 'v0.7 close: ', 'v0.7 gap-closure diagnostics present')
@@ -112,6 +112,11 @@ jobs:
           check('classes16.dex', 'v0.7 tree: dump complete (n=', 'v0.7 bottom-strip dump present')
           check('classes16.dex', 'v0.7 restore-layout: heights restored', 'v0.7 height-restore present')
           check('classes16.dex', 'v0.6 restore-layout: chain restored', 'v0.6 chain-restore diagnostics present')
+          check('classes16.dex', 'v0.8 overlay: ', 'v0.8 strip-overlay telemetry present')
+          check('classes16.dex', 'v0.8 restore: strip overlay reverted', 'v0.8 overlay-restore present')
+          check('classes16.dex', 'GestureManagerFrameLayout', 'v0.8 video-container finder present')
+          check('classes16.dex', 'ClipsSwipeRefreshLayout', 'v0.8 fallback finder present')
+          check('classes16.dex', 'v0.8 apply: edge-to-edge engaged', 'v0.8 apply marker present')
           # classes17 hosts 2Iv + 2ZS: helper string proves the lerp gate.
           check('classes17.dex', 'TTrueReelHelper', '2ZS/2Iv gate call-sites present')
           sys.exit(0 if ok else 1)
@@ -141,34 +146,41 @@ jobs:
           TAG: ${{ github.event.inputs.release_tag }}
         run: |
           NOTES=$(cat <<'EON'
-          **InstaTrueReel v0.7.0 — bottom-gap closure + strip telemetry.**
+          **InstaTrueReel v0.8.0 — strip-overlay transformation (the comment-bar fix).**
 
-          Builds on v0.6's confirmed win (status bar now transparent + video under it
-          on EVERY entry point) to attack the last opaque area — the comment-bar strip
-          (pixel-verified: video ends at y=1762/1920, "Add comment…" pill sits on an
-          opaque 158 px strip = the old tab-bar slot):
+          Field test of v0.7 (log.txt + Screenshot_20260914-155851.jpg,
+          home-feed entry): the v0.7 strip dump NAMED the culprit — inside
+          the reels fragment root (vertical IgLinearLayout 0x7f0b0bbd), the
+          video stack (GestureManagerFrameLayout 0x7f0b1b41) is a weighted
+          child that stops at y=1762, and the opaque comment strip
+          (IgLinearLayout 0x7f0b0b96, 158px, #0c1014, containing the rounded
+          "Add comment..." pill 0x7f0b0d72) is stacked BELOW it as a sibling.
+          The ancestor chain was already fully liberated by v0.6/v0.7 — the
+          bound lives INSIDE the fragment, below the fragment view, where no
+          ancestor-walk can ever reach it.
 
-          - **Bottom-gap closure (A15/A16):** the v0.6 field log proved every ancestor
-            container already has zero bottom padding/margin — the bound is STRUCTURAL
-            (a container shorter than its parent, comment bar in the slot below it).
-            v0.7 walks the chain top-down and sets exact heights that reach each
-            parent's content bottom (FrameLayout-family parents; RecyclerView and
-            ConstraintLayout parents are skipped but logged), saving + restoring
-            originals on exit. Height changes settle on the next layout pass, so the
-            re-apply ticks (100/400/1000/2500/5000 ms) cascade the closure level by
-            level. When the bound container is closed, the video extends to the screen
-            bottom and the comment pill floats over it — TikTok-style.
-          - **Height telemetry:** every `v0.7 liberate:` line now carries
-            `h=<height> ph=<parentHeight>` for each ancestor — the log names every
-            SHORT container directly.
-          - **Bottom-strip tree dump (A17/A18):** one shot at the +100 ms tick, every
-            view in the bottom 35% of the screen is logged with class / resource id /
-            absolute y-range / width / height. If anything is still bounded after
-            v0.7, the culprit view is NAMED in a tiny log for a surgical v0.8 — no
-            more 16 MB dumps needed.
-          - Install: **fully uninstall the previous build first** (signature change),
-            then install this APK. Verify with the toast: `InstaTrueReel v0.7:
-            gap-closure ON`.
+          v0.8 transforms that strip into a TikTok-style floating overlay:
+          - **Video full-bleed:** video LayoutParams.height = fragment-root
+            height, LinearLayout weight ZEROED (a weighted child is
+            re-measured to the leftover space — the weight must go or the
+            height change is silently undone).
+          - **Strip overlay:** translationY = -158 keeps the strip at the
+            exact same on-screen position, now floating ON TOP of the
+            full-height video (later sibling = drawn on top; touch dispatch
+            follows translation, so the pill stays tappable).
+          - **Transparency:** strip + direct-child backgrounds cleared; the
+            rounded pill two levels down keeps its background — "Add
+            comment..." pill floating over fullscreen video, like TikTok.
+          - Inert by design on the reels tab (no strip gap). Everything
+            saved once and restored on exit; idempotent re-assert on every
+            re-apply tick (100/400/1000/2500 ms).
+
+          Install over v0.7 (signature unchanged). Verify with the toast:
+          `InstaTrueReel v0.8: strip-overlay ON`. Same fix covers home-feed,
+          Watch History and Likes entries (same fragment, same strip). If
+          anything is still off, a small `adb logcat -s InstaTrueReel`
+          capture now shows `v0.8 overlay:` / `v0.8 restore:` lines naming
+          exactly what happened.
 
           ${{ github.event.inputs.notes }}
           EON
@@ -178,23 +190,25 @@ jobs:
             gh release upload "$TAG" "$OUT_APK" --clobber
           else
             gh release create "$TAG" "$OUT_APK" \
-              --title "InstaTrueReel $TAG - bottom-gap closure + strip telemetry" \
+              --title "InstaTrueReel $TAG - strip-overlay transformation" \
               --notes "$NOTES"
           fi
 
       - name: Summary
         run: |
           {
-            echo "## InstaTrueReel Build (v0.7 — bottom-gap closure + strip telemetry)"
+            echo "## InstaTrueReel Build (v0.8 — strip-overlay transformation)"
             echo ""
             echo "- Input: \`$APK_FILE\`"
             echo "- Output: \`$OUT_APK\` ($(ls -lh "$OUT_APK" 2>/dev/null | awk '{print $5}'))"
             echo "- Core patch: 9Wz.EEr() forced true (IG native edge-to-edge reels mode)"
             echo "- Interceptors: 1fC.A04 (status bar) + 1fI.A04 (nav bar)"
             echo "- v0.6 kept: chain liberation walk (STATUS BAR FIXED everywhere)"
-            echo "- NEW v0.7: bottom-gap closure A15/A16 (exact-height surgery, top-down,"
+            echo "- v0.7 kept: bottom-gap closure A15/A16 (exact-height surgery, top-down,"
             echo "  cascading via re-apply ticks) + h=/ph= height telemetry"
-            echo "- NEW v0.7: A17/A18 one-shot bottom-strip tree dump (culprit naming)"
+            echo "- v0.7 kept: A17/A18 one-shot bottom-strip tree dump (culprit naming)"
+            echo "- NEW v0.8: strip overlay A19/A1A/A1B/A1C/A1D/A1E (video full-height"
+            echo "  + weight=0; comment strip -> floating transparent overlay; pill kept)"
             echo "- Release tag: ${{ github.event.inputs.release_tag }}"
             echo "- Notes: ${{ github.event.inputs.notes }}"
           } >> "$GITHUB_STEP_SUMMARY"

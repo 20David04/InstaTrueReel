@@ -615,3 +615,41 @@ of the screenshot:
   INSIDE the fragment's Litho item (stacked section) — patch the item root
   builder (ACO.A0w / I45 family) so the media component gets the full page
   height and the comment row overlays (v0.8 static Litho patch).
+
+## Phase 7 — v0.8.0-phase7: strip-overlay transformation (comment-bar fix)
+
+Field evidence (v0.7 build, log.txt 2026-09-14 17:29, home-feed entry):
+- v0.7 gap closure WORKED: settled strip dump shows the full ancestor chain
+  at [0..1920] (ConstraintLayout 0x7f0b2248, IgFrameLayout 0x7f0b2246,
+  outer ViewPager2 0x7f0b3f45 — all closed by A15/A16 across ticks).
+- The strip dump NAMED the residual bound: inside the fragment root
+  IgLinearLayout 0x7f0b0bbd (vertical): GestureManagerFrameLayout
+  0x7f0b1b41 [0..1762] (weighted video child, 158px short) and the opaque
+  IgLinearLayout 0x7f0b0b96 [1762..1920] strip containing IgFrameLayout ->
+  pill IgLinearLayout 0x7f0b0d72 (126px) -> IgTextView 0x7f0b0d7a
+  ("Add comment..."). Tab-bar proxies confirmed invisible (overlay only).
+- VLM pixel check of Screenshot_20260914-155851.jpg: status bar transparent
+  (v0.6 win holds), opaque near-black bottom bar with pill remains.
+
+Fix (helper A19/A1A/A1B/A1C/A1D/A1E):
+1. DFS down from the fragment view (depth <= 8) for
+   GestureManagerFrameLayout; fallback ClipsSwipeRefreshLayout + climb to
+   the direct LinearLayout child. Parent must be a LinearLayout.
+2. video LayoutParams.height = parent height; LinearLayout weight ZEROED
+   (weighted children are re-measured to leftover space — zeroing the
+   weight is what makes the height stick).
+3. strip.setTranslationY(-stripH): LinearLayout lays it out below the
+   now-full-height video; the negative translation returns it to the same
+   on-screen position, drawn ON TOP of the video (later sibling). Touch
+   dispatch maps through the translation matrix, so the pill stays
+   clickable.
+4. setBackground(null) on the strip + its direct children (<= 4); the pill
+   two levels down keeps its rounded background.
+5. A1D saves (height/weight/translationY/backgrounds) once; A1B restores on
+   exit (A10) and on fresh entry (A00). Re-assert (idempotent) every tick.
+6. Inert on the reels tab (strip gap == 0 -> "video already full-bleed").
+
+Open items for v0.9 (if needed): if Watch History / Likes show
+"v0.8: video container not found (DFS)" or "video parent not a
+LinearLayout" in logcat, capture `adb logcat -s InstaTrueReel` — the
+v0.8 lines will name the exact divergence of the ModalActivity tree.

@@ -8,6 +8,7 @@ floating UI. Built entirely with GitHub Actions (decompile → smali patch → r
 
 | Release | APK | What |
 |---|---|---|
+| [v0.8.0-phase7](https://github.com/Skyro7777777/InstaTrueReel/releases/tag/v0.8.0-phase7) | `Instagram-v435.0.0.37.76-InstaTrueReel-signed.apk` | **Strip-overlay transformation — THE comment-bar fix**: the v0.7 strip dump proved the comment bar is a sibling strip INSIDE the fragment root (below the fragment view, unreachable by ancestor walks); v0.8 extends the video child to full height (weight zeroed) and floats the strip over it with cleared backgrounds — TikTok-style fullscreen video with the pill floating at the bottom |
 | [v0.7.0-phase6](https://github.com/Skyro7777777/InstaTrueReel/releases/tag/v0.7.0-phase6) | `Instagram-v435.0.0.37.76-InstaTrueReel-signed.apk` | **Bottom-gap closure + strip telemetry**: attacks the last opaque area (comment-bar strip) with exact-height surgery on short containers; names any remaining culprit view in a tiny log |
 | [v0.6.0-phase5](https://github.com/Skyro7777777/InstaTrueReel/releases/tag/v0.6.0-phase5) | `Instagram-v435.0.0.37.76-InstaTrueReel-signed.apk` | **Chain liberation — STATUS BAR FIXED ON EVERY ENTRY POINT** (home-feed overlay, Watch History, Likes, Reels tab); full logcat diagnostics |
 | [v0.5.0-phase4](https://github.com/Skyro7777777/InstaTrueReel/releases/tag/v0.5.0-phase4) | `Instagram-v435.0.0.37.76-InstaTrueReel-signed.apk` | **Full-bleed bottom + modal path attempt**: transparent main tab bar (2ZS/0bQ/0bI) + runtime view-id de-block (turned out to be a silent no-op — fixed in v0.6) |
@@ -16,24 +17,21 @@ floating UI. Built entirely with GitHub Actions (decompile → smali patch → r
 | [v0.2.0-phase1.1](https://github.com/Skyro7777777/InstaTrueReel/releases/tag/v0.2.0-phase1.1) | `Instagram-v435.0.0.37.76-InstaTrueReel-signed.apk` | Window-chrome interceptors only (superseded) |
 | [v0.1.0-phase1](https://github.com/Skyro7777777/InstaTrueReel/releases/tag/v0.1.0-phase1) | `Instagram-v435.0.0.37.76-InstaTrueReel-signed.apk` | Initial attempt (superseded) |
 
-> **Always grab the newest release (v0.7.0).** The v0.6 field test (log + pixel-verified
-> screenshot) CONFIRMED the status bar is fixed on every entry point — video now runs
-> under the transparent status bar on home-feed, Watch History, Likes and the Reels tab.
-> The one remaining opaque area is the **comment-bar strip**: pixel analysis shows the
-> video ends 158 px above the screen bottom with the "Add comment…" pill sitting on an
-> opaque background in the old tab-bar slot. The v0.6 log proved every container's
-> bottom padding/margin is already zero — the bound is STRUCTURAL (a container shorter
-> than its parent). v0.7 adds the **bottom-gap closure walk**: it walks the container
-> chain top-down and gives every short container an exact height that reaches its
-> parent's bottom (saved + restored on exit, cascading across the re-apply ticks).
-> When the bound container is closed, the video extends to the screen bottom and the
-> comment pill floats over it — TikTok-style.
+> **Always grab the newest release (v0.8.0).** The status bar is transparent on every
+> entry point (the v0.6 win holds), and the v0.7 strip dump PROVED the last opaque area
+> — the **comment bar** — is a sibling strip INSIDE the fragment root LinearLayout,
+> below the fragment view where no ancestor-walk can ever reach it. v0.8 transforms
+> it: the weighted video child is extended to the full fragment-root height (its
+> LinearLayout weight zeroed so the change sticks) and the opaque strip is floated
+> over the now-fullscreen video via `translationY` with cleared backgrounds —
+> TikTok-style fullscreen video with the "Add comment…" pill floating at the bottom.
+> Same fix covers home-feed, Watch History and Likes entries (same fragment, same
+> strip); inert on the Reels tab (already full-bleed); everything restored on exit.
 >
-> v0.7 also turns the log into a full map: every `v0.7 liberate:` line carries
-> `h=<height> ph=<parentHeight>` (naming every short container), and a one-shot
-> **bottom-strip tree dump** logs every view in the bottom 35% of the screen with
-> class / id / position / size. If anything is still bounded, the culprit view is
-> NAMED in a tiny `adb logcat -s InstaTrueReel` capture for a surgical v0.8.
+> Install over v0.7 (signature unchanged). If anything still looks off, the log now
+> tells the whole story: `v0.8 overlay:` / `v0.8 restore:` lines (see the diagnostics
+> sample below) name exactly what was applied — and `v0.8: video container not found
+> (DFS)` / `v0.8: video parent not a LinearLayout` would name the divergence directly.
 
 ### Install (IMPORTANT — read fully)
 
@@ -61,23 +59,23 @@ floating UI. Built entirely with GitHub Actions (decompile → smali patch → r
 InstaTrueReel is **raw smali patching, always-on, zero settings**. It activates automatically
 the moment you enter Reels and deactivates when you leave.
 
-**How to confirm you're really running v0.7:** every time you enter Reels, a small popup
+**How to confirm you're really running v0.8:** every time you enter Reels, a small popup
 message (a "toast") appears at the bottom of the screen:
 
 ```
-InstaTrueReel v0.7: gap-closure ON
+InstaTrueReel v0.8: strip-overlay ON
 ```
 
-- **Toast shows + video reaches the screen bottom behind the comment pill** → working.
+- **Toast shows + fullscreen video with the comment pill floating over it** → working.
 - **Toast shows + still an opaque strip below the video** → grab the tiny log (below) and
-  open an issue — v0.7's diagnostics name the culprit view for v0.8.
+  open an issue — v0.8's `v0.8 overlay:` / failure lines name exactly what happened.
 - **No toast at all** → you are NOT running this build. The install failed or the old APK is
   still installed. Uninstall Instagram completely (check the app drawer — long-press →
-  uninstall), reboot if in doubt, then install the v0.7 APK again.
+  uninstall), reboot if in doubt, then install the v0.8 APK again.
 
-Optional (advanced): run `adb logcat -s InstaTrueReel` while entering Reels — v0.7 logs
+Optional (advanced): run `adb logcat -s InstaTrueReel` while entering Reels — v0.8 logs
 `apply: edge-to-edge engaged (fresh entry)`, `restore: ...`, per-view detail lines AND
-the new gap-closure telemetry:
+the new strip-overlay telemetry:
 
 ```
 v0.6 deblock eval: pager=m=0 main=m=0
@@ -87,12 +85,17 @@ v0.7 close: androidx.viewpager2.widget.ViewPager2 h=1762->1920 gap=158          
 v0.7 gaps closed (n=1)
 v0.7 tree: X.XIU ... y=[1783..1908] w=996                                                        ← strip inventory
 v0.7 tree: dump complete (n=57)
+v0.8 apply: edge-to-edge engaged (fresh entry)
+v0.8 overlay: com.instagram.ui.gesture.GestureManagerFrameLayout ty=-158 (bg cleared, video full-height)
+v0.8: video already full-bleed (no strip)                                                        ← reels tab (inert)
+v0.8 restore: strip overlay reverted
 v0.7 restore-layout: heights restored (n=1)
 ```
 
 If the strip persists, capture that log (it's small — `adb logcat -s InstaTrueReel` only
-logs our tag) and open an issue: the `v0.7 liberate:` heights, the `v0.7 close:` actions
-and the `v0.7 tree:` inventory name the exact remaining culprit for a surgical v0.8.
+logs our tag) and open an issue: the `v0.8 overlay:` / `v0.8 restore:` lines say exactly
+what was transformed, and a `v0.8: video container not found (DFS)` or `v0.8: video
+parent not a LinearLayout` line names the exact divergence for a surgical v0.9.
 
 ### What v0.3 changes
 

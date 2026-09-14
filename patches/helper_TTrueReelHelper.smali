@@ -23,6 +23,17 @@
 .field public static A0I:Ljava/util/ArrayList;              # v0.7: saved heights (Ljava/lang/Integer;), parallel to A0H
 .field public static A0J:I                                    # v0.7: A15 invocation counter (tree dump on 2nd call)
 .field public static A0K:I                                    # v0.7: tree-dump line counter
+.field public static A0L:Landroid/view/View;                   # v0.8: video container (extended to full height)
+.field public static A0M:I                                     # v0.8: saved video LayoutParams.height
+.field public static A0N:F                                     # v0.8: saved video weight (valid iff A0V)
+.field public static A0O:Landroid/view/View;                   # v0.8: comment strip (overlaid)
+.field public static A0P:F                                     # v0.8: saved strip translationY
+.field public static A0Q:Ljava/util/ArrayList;                 # v0.8: strip direct-child views (cleared bgs)
+.field public static A0R:Ljava/util/ArrayList;                 # v0.8: saved strip direct-child backgrounds
+.field public static A0S:Landroid/graphics/drawable/Drawable;  # v0.8: saved strip background
+.field public static A0T:Z                                     # v0.8: overlay applied flag
+.field public static A0U:I                                     # v0.8: strip height (px)
+.field public static A0V:Z                                     # v0.8: video weight saved flag
 
 
 # direct methods
@@ -93,6 +104,9 @@
     const/4 v0, 0x0
     sput v0, LX/TTrueReelHelper;->A0J:I
 
+    # ---- v0.8: clean slate for the strip overlay ----
+    invoke-static {}, LX/TTrueReelHelper;->A1B()V
+
     # ---- de-block bottom layout (specific known containers, with diagnostics) ----
     invoke-static {v4}, LX/TTrueReelHelper;->A08(Landroid/app/Activity;)V
 
@@ -103,7 +117,7 @@
     invoke-virtual {p0}, Landroidx/fragment/app/Fragment;->getActivity()Landroidx/fragment/app/FragmentActivity;
     move-result-object v0
     if-eqz v0, :cond_no_toast
-    const-string v1, "InstaTrueReel v0.7: gap-closure ON"
+    const-string v1, "InstaTrueReel v0.8: strip-overlay ON"
     const/4 v2, 0x0
     invoke-static {v0, v1, v2}, Landroid/widget/Toast;->makeText(Landroid/content/Context;Ljava/lang/CharSequence;I)Landroid/widget/Toast;
     move-result-object v0
@@ -111,7 +125,7 @@
     :cond_no_toast
 
     const-string v1, "InstaTrueReel"
-    const-string v2, "v0.7 apply: edge-to-edge engaged (fresh entry)"
+    const-string v2, "v0.8 apply: edge-to-edge engaged (fresh entry)"
     invoke-static {v1, v2}, Landroid/util/Log;->e(Ljava/lang/String;Ljava/lang/String;)I
 
     :cond_active
@@ -131,7 +145,7 @@
     :catch_0
     move-exception v0
     const-string v1, "InstaTrueReel"
-    const-string v2, "v0.7 apply: exception (recovered)"
+    const-string v2, "v0.8 apply: exception (recovered)"
     invoke-static {v1, v2, v0}, Landroid/util/Log;->e(Ljava/lang/String;Ljava/lang/String;Ljava/lang/Throwable;)I
     const/4 v1, 0x0
     sput-object v1, LX/TTrueReelHelper;->A00:Landroid/view/Window;
@@ -212,7 +226,7 @@
     invoke-virtual {v1}, Landroid/view/View;->requestApplyInsets()V
 
     const-string v2, "InstaTrueReel"
-    const-string v3, "v0.7 restore: window chrome + layout restored"
+    const-string v3, "v0.8 restore: window chrome + layout restored"
     invoke-static {v2, v3}, Landroid/util/Log;->e(Ljava/lang/String;Ljava/lang/String;)I
 
     :cond_reset
@@ -229,7 +243,7 @@
     :catch_0
     move-exception v0
     const-string v1, "InstaTrueReel"
-    const-string v2, "v0.7 restore: exception (recovered)"
+    const-string v2, "v0.8 restore: exception (recovered)"
     invoke-static {v1, v2, v0}, Landroid/util/Log;->e(Ljava/lang/String;Ljava/lang/String;Ljava/lang/Throwable;)I
     const/4 v1, 0x0
     sput-object v1, LX/TTrueReelHelper;->A00:Landroid/view/Window;
@@ -725,6 +739,10 @@
     invoke-static {v4, v0}, Landroid/util/Log;->e(Ljava/lang/String;Ljava/lang/String;)I
 
     :cond_no_log
+
+    # ---- v0.8: comment-strip overlay (bottom bar -> floating overlay) ----
+    invoke-static {p0}, LX/TTrueReelHelper;->A19(Landroid/app/Activity;)V
+
     :cond_done
     :try_end_0
     .catch Ljava/lang/Throwable; {:try_start_0 .. :try_end_0} :catch_0
@@ -1120,6 +1138,9 @@
     :try_start_0
     if-eqz p0, :cond_done
 
+    # ---- v0.8: restore the comment-strip overlay FIRST ----
+    invoke-static {}, LX/TTrueReelHelper;->A1B()V
+
     # ---- v0.7: restore the gap-closed heights ----
     sget-object v0, LX/TTrueReelHelper;->A0H:Ljava/util/ArrayList;
     if-eqz v0, :cond_no_heights
@@ -1491,6 +1512,585 @@
     move-exception v0
     const-string v1, "InstaTrueReel"
     const-string v2, "v0.7 tree: exception (recovered)"
+    invoke-static {v1, v2, v0}, Landroid/util/Log;->e(Ljava/lang/String;Ljava/lang/String;Ljava/lang/Throwable;)I
+    return-void
+.end method
+
+
+# A19(Landroid/app/Activity;)V == v0.8 strip-overlay orchestrator.
+# Called at the end of A15 (fresh apply + every re-apply tick). Finds the reels
+# video container inside the fragment, extends it to the full parent height
+# (zeroing its LinearLayout weight so the change sticks), then turns the opaque
+# comment strip below it into a floating overlay: translationY = -stripH keeps
+# it at the same on-screen position (drawn ON TOP of the now-fullscreen video,
+# touch dispatch follows translation so the pill stays tappable) and its
+# background + direct-child backgrounds are cleared (the pill two levels down
+# keeps its rounded background). Inert when there is no strip (reels tab).
+.method public static A19(Landroid/app/Activity;)V
+    .locals 10
+
+    :try_start_0
+    # ---- idempotent re-assert while already applied ----
+    sget-boolean v0, LX/TTrueReelHelper;->A0T:Z
+    if-eqz v0, :fresh
+
+    sget-object v2, LX/TTrueReelHelper;->A0L:Landroid/view/View;
+    if-eqz v2, :reassert_done
+
+    invoke-virtual {v2}, Landroid/view/View;->getParent()Landroid/view/ViewParent;
+    move-result-object v0
+    if-eqz v0, :reassert_done
+    instance-of v1, v0, Landroid/view/View;
+    if-eqz v1, :reassert_done
+    check-cast v0, Landroid/view/View;
+    invoke-virtual {v0}, Landroid/view/View;->getHeight()I
+    move-result v1
+
+    invoke-virtual {v2}, Landroid/view/View;->getLayoutParams()Landroid/view/ViewGroup$LayoutParams;
+    move-result-object v3
+    if-eqz v3, :reassert_strip
+    iput v1, v3, Landroid/view/ViewGroup$LayoutParams;->height:I
+    invoke-virtual {v2}, Landroid/view/View;->requestLayout()V
+
+    :reassert_strip
+    sget-object v4, LX/TTrueReelHelper;->A0O:Landroid/view/View;
+    if-eqz v4, :reassert_done
+    sget v5, LX/TTrueReelHelper;->A0U:I
+    neg-int v5, v5
+    int-to-float v5, v5
+    invoke-virtual {v4, v5}, Landroid/view/View;->setTranslationY(F)V
+    const/4 v6, 0x0
+    invoke-virtual {v4, v6}, Landroid/view/View;->setBackground(Landroid/graphics/drawable/Drawable;)V
+    sget-object v7, LX/TTrueReelHelper;->A0Q:Ljava/util/ArrayList;
+    if-eqz v7, :reassert_done
+    invoke-virtual {v7}, Ljava/util/ArrayList;->size()I
+    move-result v8
+    const/4 v9, 0x0
+    :reassert_loop
+    if-ge v9, v8, :reassert_done
+    invoke-virtual {v7, v9}, Ljava/util/ArrayList;->get(I)Ljava/lang/Object;
+    move-result-object v3
+    if-eqz v3, :reassert_next
+    check-cast v3, Landroid/view/View;
+    invoke-virtual {v3, v6}, Landroid/view/View;->setBackground(Landroid/graphics/drawable/Drawable;)V
+    :reassert_next
+    add-int/lit8 v9, v9, 0x1
+    goto :reassert_loop
+
+    :reassert_done
+    return-void
+
+    :fresh
+    # ---- locate the fragment view ----
+    sget-object v0, LX/TTrueReelHelper;->A0F:Landroidx/fragment/app/Fragment;
+    if-eqz v0, :cond_done
+    invoke-virtual {v0}, Landroidx/fragment/app/Fragment;->getView()Landroid/view/View;
+    move-result-object v1
+    if-eqz v1, :cond_done
+
+    # ---- DFS for the video container (GestureManagerFrameLayout) ----
+    const/4 v2, 0x0
+    invoke-static {v1, v2}, LX/TTrueReelHelper;->A1A(Landroid/view/View;I)Landroid/view/View;
+    move-result-object v2
+    if-nez v2, :have_video
+
+    # ---- fallback: ClipsSwipeRefreshLayout, climb to the LinearLayout child ----
+    const/4 v2, 0x0
+    invoke-static {v1, v2}, LX/TTrueReelHelper;->A1C(Landroid/view/View;I)Landroid/view/View;
+    move-result-object v2
+    if-eqz v2, :not_found
+
+    :climb_head
+    invoke-virtual {v2}, Landroid/view/View;->getParent()Landroid/view/ViewParent;
+    move-result-object v3
+    if-eqz v3, :not_found
+    instance-of v4, v3, Landroid/widget/LinearLayout;
+    if-nez v4, :have_video
+    instance-of v4, v3, Landroid/view/View;
+    if-eqz v4, :not_found
+    check-cast v3, Landroid/view/View;
+    move-object v2, v3
+    goto :climb_head
+
+    :have_video
+    # ---- the video container's parent must be a LinearLayout ----
+    invoke-virtual {v2}, Landroid/view/View;->getParent()Landroid/view/ViewParent;
+    move-result-object v3
+    if-eqz v3, :not_found
+    instance-of v4, v3, Landroid/widget/LinearLayout;
+    if-eqz v4, :bad_parent
+    check-cast v3, Landroid/view/ViewGroup;
+
+    # ---- strip geometry ----
+    invoke-virtual {v3}, Landroid/view/ViewGroup;->getHeight()I
+    move-result v5
+    invoke-virtual {v2}, Landroid/view/View;->getBottom()I
+    move-result v6
+    sub-int v7, v5, v6
+
+    if-lez v7, :no_gap
+    const/16 v8, 0x190
+    if-ge v7, v8, :gap_too_big
+
+    # ---- find the strip: the child that starts exactly at the video bottom ----
+    const/4 v4, 0x0
+    invoke-virtual {v3}, Landroid/view/ViewGroup;->getChildCount()I
+    move-result v8
+    const/4 v9, 0x0
+    :strip_loop
+    if-ge v9, v8, :strip_loop_end
+    invoke-virtual {v3, v9}, Landroid/view/ViewGroup;->getChildAt(I)Landroid/view/View;
+    move-result-object v0
+    if-eqz v0, :strip_next
+    invoke-virtual {v0}, Landroid/view/View;->getTop()I
+    move-result v1
+    if-ne v1, v6, :strip_next
+    invoke-virtual {v0}, Landroid/view/View;->getHeight()I
+    move-result v1
+    if-ne v1, v7, :strip_next
+    if-eqz v4, :strip_take
+    instance-of v1, v0, Landroid/widget/LinearLayout;
+    if-eqz v1, :strip_next
+    move-object v4, v0
+    goto :strip_loop_end
+    :strip_take
+    move-object v4, v0
+    :strip_next
+    add-int/lit8 v9, v9, 0x1
+    goto :strip_loop
+    :strip_loop_end
+    if-nez v4, :strip_found
+
+    const-string v1, "InstaTrueReel"
+    const-string v2, "v0.8: strip not found below video"
+    invoke-static {v1, v2}, Landroid/util/Log;->e(Ljava/lang/String;Ljava/lang/String;)I
+    return-void
+
+    :strip_found
+    # ---- save original state once, then transform ----
+    invoke-static {v2, v4, v7}, LX/TTrueReelHelper;->A1D(Landroid/view/View;Landroid/view/View;I)V
+    invoke-static {v2, v4, v7}, LX/TTrueReelHelper;->A1E(Landroid/view/View;Landroid/view/View;I)V
+    return-void
+
+    :no_gap
+    const-string v1, "InstaTrueReel"
+    const-string v2, "v0.8: video already full-bleed (no strip)"
+    invoke-static {v1, v2}, Landroid/util/Log;->e(Ljava/lang/String;Ljava/lang/String;)I
+    return-void
+
+    :gap_too_big
+    const-string v1, "InstaTrueReel"
+    const-string v2, "v0.8: strip gap too big (skipped)"
+    invoke-static {v1, v2}, Landroid/util/Log;->e(Ljava/lang/String;Ljava/lang/String;)I
+    return-void
+
+    :bad_parent
+    const-string v1, "InstaTrueReel"
+    const-string v2, "v0.8: video parent not a LinearLayout"
+    invoke-static {v1, v2}, Landroid/util/Log;->e(Ljava/lang/String;Ljava/lang/String;)I
+    return-void
+
+    :not_found
+    const-string v1, "InstaTrueReel"
+    const-string v2, "v0.8: video container not found (DFS)"
+    invoke-static {v1, v2}, Landroid/util/Log;->e(Ljava/lang/String;Ljava/lang/String;)I
+
+    :cond_done
+    :try_end_0
+    .catch Ljava/lang/Throwable; {:try_start_0 .. :try_end_0} :catch_0
+
+    return-void
+
+    :catch_0
+    move-exception v0
+    const-string v1, "InstaTrueReel"
+    const-string v2, "v0.8: exception (recovered)"
+    invoke-static {v1, v2, v0}, Landroid/util/Log;->e(Ljava/lang/String;Ljava/lang/String;Ljava/lang/Throwable;)I
+    return-void
+.end method
+
+
+# A1A(Landroid/view/View;I)Landroid/view/View; == v0.8 bounded DFS for the
+# reels video container (com.instagram.ui.gesture.GestureManagerFrameLayout).
+# Depth-capped at 8 levels; returns the first match or null.
+.method public static A1A(Landroid/view/View;I)Landroid/view/View;
+    .locals 5
+
+    :try_start_0
+    if-eqz p0, :ret_null
+    const/16 v0, 0x8
+    if-gt p1, v0, :ret_null
+
+    instance-of v0, p0, Lcom/instagram/ui/gesture/GestureManagerFrameLayout;
+    if-eqz v0, :not_match
+    return-object p0
+
+    :not_match
+    instance-of v0, p0, Landroid/view/ViewGroup;
+    if-eqz v0, :ret_null
+    check-cast p0, Landroid/view/ViewGroup;
+    invoke-virtual {p0}, Landroid/view/ViewGroup;->getChildCount()I
+    move-result v1
+    const/4 v2, 0x0
+    :loop_head
+    if-ge v2, v1, :loop_end
+    invoke-virtual {p0, v2}, Landroid/view/ViewGroup;->getChildAt(I)Landroid/view/View;
+    move-result-object v3
+    if-eqz v3, :loop_next
+    add-int/lit8 v4, p1, 0x1
+    invoke-static {v3, v4}, LX/TTrueReelHelper;->A1A(Landroid/view/View;I)Landroid/view/View;
+    move-result-object v0
+    if-eqz v0, :loop_next
+    return-object v0
+    :loop_next
+    add-int/lit8 v2, v2, 0x1
+    goto :loop_head
+
+    :loop_end
+    :ret_null
+    :try_end_0
+    .catch Ljava/lang/Throwable; {:try_start_0 .. :try_end_0} :catch_0
+
+    const/4 v0, 0x0
+    return-object v0
+
+    :catch_0
+    move-exception v0
+    const/4 v1, 0x0
+    return-object v1
+.end method
+
+
+# A1C(Landroid/view/View;I)Landroid/view/View; == v0.8 bounded DFS fallback:
+# instagram.features.clips.viewer.ui.ClipsSwipeRefreshLayout (the reels pager's
+# swipe-refresh host). A19 climbs from it to the direct LinearLayout child.
+.method public static A1C(Landroid/view/View;I)Landroid/view/View;
+    .locals 5
+
+    :try_start_0
+    if-eqz p0, :ret_null
+    const/16 v0, 0x8
+    if-gt p1, v0, :ret_null
+
+    instance-of v0, p0, Linstagram/features/clips/viewer/ui/ClipsSwipeRefreshLayout;
+    if-eqz v0, :not_match
+    return-object p0
+
+    :not_match
+    instance-of v0, p0, Landroid/view/ViewGroup;
+    if-eqz v0, :ret_null
+    check-cast p0, Landroid/view/ViewGroup;
+    invoke-virtual {p0}, Landroid/view/ViewGroup;->getChildCount()I
+    move-result v1
+    const/4 v2, 0x0
+    :loop_head
+    if-ge v2, v1, :loop_end
+    invoke-virtual {p0, v2}, Landroid/view/ViewGroup;->getChildAt(I)Landroid/view/View;
+    move-result-object v3
+    if-eqz v3, :loop_next
+    add-int/lit8 v4, p1, 0x1
+    invoke-static {v3, v4}, LX/TTrueReelHelper;->A1C(Landroid/view/View;I)Landroid/view/View;
+    move-result-object v0
+    if-eqz v0, :loop_next
+    return-object v0
+    :loop_next
+    add-int/lit8 v2, v2, 0x1
+    goto :loop_head
+
+    :loop_end
+    :ret_null
+    :try_end_0
+    .catch Ljava/lang/Throwable; {:try_start_0 .. :try_end_0} :catch_0
+
+    const/4 v0, 0x0
+    return-object v0
+
+    :catch_0
+    move-exception v0
+    const/4 v1, 0x0
+    return-object v1
+.end method
+
+
+# A1B()V == v0.8 restore the strip overlay (video height/weight, strip
+# translationY + backgrounds). Wired into A10 (exit restore) and A00
+# (fresh-entry clean slate). No-op unless the overlay is applied.
+.method public static A1B()V
+    .locals 7
+
+    :try_start_0
+    sget-boolean v0, LX/TTrueReelHelper;->A0T:Z
+    if-eqz v0, :cond_done
+
+    # ---- restore the video container ----
+    sget-object v1, LX/TTrueReelHelper;->A0L:Landroid/view/View;
+    if-eqz v1, :restore_strip
+
+    invoke-virtual {v1}, Landroid/view/View;->getLayoutParams()Landroid/view/ViewGroup$LayoutParams;
+    move-result-object v2
+    if-eqz v2, :rlayout
+    sget v3, LX/TTrueReelHelper;->A0M:I
+    iput v3, v2, Landroid/view/ViewGroup$LayoutParams;->height:I
+    sget-boolean v3, LX/TTrueReelHelper;->A0V:Z
+    if-eqz v3, :rweight_done
+    instance-of v3, v2, Landroid/widget/LinearLayout$LayoutParams;
+    if-eqz v3, :rweight_done
+    check-cast v2, Landroid/widget/LinearLayout$LayoutParams;
+    sget v3, LX/TTrueReelHelper;->A0N:F
+    iput v3, v2, Landroid/widget/LinearLayout$LayoutParams;->weight:F
+    :rweight_done
+    invoke-virtual {v1}, Landroid/view/View;->requestLayout()V
+
+    :rlayout
+    :restore_strip
+    # ---- restore the strip ----
+    sget-object v1, LX/TTrueReelHelper;->A0O:Landroid/view/View;
+    if-eqz v1, :rreset
+    sget v2, LX/TTrueReelHelper;->A0P:F
+    invoke-virtual {v1, v2}, Landroid/view/View;->setTranslationY(F)V
+    sget-object v2, LX/TTrueReelHelper;->A0S:Landroid/graphics/drawable/Drawable;
+    invoke-virtual {v1, v2}, Landroid/view/View;->setBackground(Landroid/graphics/drawable/Drawable;)V
+
+    sget-object v3, LX/TTrueReelHelper;->A0Q:Ljava/util/ArrayList;
+    if-eqz v3, :rstrip_done
+    sget-object v4, LX/TTrueReelHelper;->A0R:Ljava/util/ArrayList;
+    if-eqz v4, :rstrip_done
+    invoke-virtual {v3}, Ljava/util/ArrayList;->size()I
+    move-result v5
+    const/4 v2, 0x0
+    :rkids_loop
+    if-ge v2, v5, :rkids_end
+    invoke-virtual {v3, v2}, Ljava/util/ArrayList;->get(I)Ljava/lang/Object;
+    move-result-object v0
+    if-eqz v0, :rkids_next
+    check-cast v0, Landroid/view/View;
+    invoke-virtual {v4, v2}, Ljava/util/ArrayList;->get(I)Ljava/lang/Object;
+    move-result-object v6
+    check-cast v6, Landroid/graphics/drawable/Drawable;
+    invoke-virtual {v0, v6}, Landroid/view/View;->setBackground(Landroid/graphics/drawable/Drawable;)V
+    :rkids_next
+    add-int/lit8 v2, v2, 0x1
+    goto :rkids_loop
+    :rkids_end
+
+    :rstrip_done
+    invoke-virtual {v1}, Landroid/view/View;->requestLayout()V
+
+    :rreset
+    const/4 v0, 0x0
+    sput-object v0, LX/TTrueReelHelper;->A0L:Landroid/view/View;
+    sput-object v0, LX/TTrueReelHelper;->A0O:Landroid/view/View;
+    sput-object v0, LX/TTrueReelHelper;->A0Q:Ljava/util/ArrayList;
+    sput-object v0, LX/TTrueReelHelper;->A0R:Ljava/util/ArrayList;
+    sput-object v0, LX/TTrueReelHelper;->A0S:Landroid/graphics/drawable/Drawable;
+    const/4 v1, 0x0
+    sput v1, LX/TTrueReelHelper;->A0M:I
+    sput v1, LX/TTrueReelHelper;->A0U:I
+    const/4 v2, 0x0
+    int-to-float v2, v2
+    sput v2, LX/TTrueReelHelper;->A0N:F
+    sput-boolean v1, LX/TTrueReelHelper;->A0T:Z
+    sput-boolean v1, LX/TTrueReelHelper;->A0V:Z
+
+    const-string v1, "InstaTrueReel"
+    const-string v2, "v0.8 restore: strip overlay reverted"
+    invoke-static {v1, v2}, Landroid/util/Log;->e(Ljava/lang/String;Ljava/lang/String;)I
+
+    :cond_done
+    :try_end_0
+    .catch Ljava/lang/Throwable; {:try_start_0 .. :try_end_0} :catch_0
+
+    return-void
+
+    :catch_0
+    move-exception v0
+    const-string v1, "InstaTrueReel"
+    const-string v2, "v0.8 restore: exception (recovered)"
+    invoke-static {v1, v2, v0}, Landroid/util/Log;->e(Ljava/lang/String;Ljava/lang/String;Ljava/lang/Throwable;)I
+    return-void
+.end method
+
+
+# A1D(Landroid/view/View;Landroid/view/View;I)V == v0.8 save the original
+# overlay state ONCE (video LayoutParams.height + weight, strip translationY +
+# background + up to 4 direct-child backgrounds). p0 = video, p1 = strip,
+# p2 = strip height.
+.method public static A1D(Landroid/view/View;Landroid/view/View;I)V
+    .locals 7
+
+    :try_start_0
+    # ---- video: remember LayoutParams.height (+ weight when present) ----
+    sput-object p0, LX/TTrueReelHelper;->A0L:Landroid/view/View;
+    const/4 v0, -0x2
+    sput v0, LX/TTrueReelHelper;->A0M:I
+    const/4 v0, 0x0
+    sput-boolean v0, LX/TTrueReelHelper;->A0V:Z
+
+    invoke-virtual {p0}, Landroid/view/View;->getLayoutParams()Landroid/view/ViewGroup$LayoutParams;
+    move-result-object v1
+    if-eqz v1, :lp_done
+    iget v0, v1, Landroid/view/ViewGroup$LayoutParams;->height:I
+    sput v0, LX/TTrueReelHelper;->A0M:I
+    instance-of v2, v1, Landroid/widget/LinearLayout$LayoutParams;
+    if-eqz v2, :lp_done
+    check-cast v1, Landroid/widget/LinearLayout$LayoutParams;
+    iget v2, v1, Landroid/widget/LinearLayout$LayoutParams;->weight:F
+    sput v2, LX/TTrueReelHelper;->A0N:F
+    const/4 v2, 0x1
+    sput-boolean v2, LX/TTrueReelHelper;->A0V:Z
+    :lp_done
+
+    # ---- strip: remember translationY + background + child backgrounds ----
+    sput-object p1, LX/TTrueReelHelper;->A0O:Landroid/view/View;
+    invoke-virtual {p1}, Landroid/view/View;->getTranslationY()F
+    move-result v0
+    sput v0, LX/TTrueReelHelper;->A0P:F
+    invoke-virtual {p1}, Landroid/view/View;->getBackground()Landroid/graphics/drawable/Drawable;
+    move-result-object v0
+    sput-object v0, LX/TTrueReelHelper;->A0S:Landroid/graphics/drawable/Drawable;
+
+    new-instance v0, Ljava/util/ArrayList;
+    invoke-direct {v0}, Ljava/util/ArrayList;-><init>()V
+    sput-object v0, LX/TTrueReelHelper;->A0Q:Ljava/util/ArrayList;
+    new-instance v0, Ljava/util/ArrayList;
+    invoke-direct {v0}, Ljava/util/ArrayList;-><init>()V
+    sput-object v0, LX/TTrueReelHelper;->A0R:Ljava/util/ArrayList;
+
+    instance-of v0, p1, Landroid/view/ViewGroup;
+    if-eqz v0, :kids_done
+    check-cast p1, Landroid/view/ViewGroup;
+    invoke-virtual {p1}, Landroid/view/ViewGroup;->getChildCount()I
+    move-result v1
+    const/4 v2, 0x4
+    if-le v1, v2, :cnt_ok
+    move v1, v2
+    :cnt_ok
+    const/4 v3, 0x0
+    :kids_loop
+    if-ge v3, v1, :kids_done
+    invoke-virtual {p1, v3}, Landroid/view/ViewGroup;->getChildAt(I)Landroid/view/View;
+    move-result-object v4
+    if-eqz v4, :kids_next
+    sget-object v5, LX/TTrueReelHelper;->A0Q:Ljava/util/ArrayList;
+    invoke-virtual {v5, v4}, Ljava/util/ArrayList;->add(Ljava/lang/Object;)Z
+    sget-object v6, LX/TTrueReelHelper;->A0R:Ljava/util/ArrayList;
+    invoke-virtual {v4}, Landroid/view/View;->getBackground()Landroid/graphics/drawable/Drawable;
+    move-result-object v0
+    invoke-virtual {v6, v0}, Ljava/util/ArrayList;->add(Ljava/lang/Object;)Z
+    :kids_next
+    add-int/lit8 v3, v3, 0x1
+    goto :kids_loop
+    :kids_done
+
+    sput p2, LX/TTrueReelHelper;->A0U:I
+    const/4 v0, 0x1
+    sput-boolean v0, LX/TTrueReelHelper;->A0T:Z
+    :try_end_0
+    .catch Ljava/lang/Throwable; {:try_start_0 .. :try_end_0} :catch_0
+
+    return-void
+
+    :catch_0
+    move-exception v0
+    const-string v1, "InstaTrueReel"
+    const-string v2, "v0.8 save: exception (recovered)"
+    invoke-static {v1, v2, v0}, Landroid/util/Log;->e(Ljava/lang/String;Ljava/lang/String;Ljava/lang/Throwable;)I
+    return-void
+.end method
+
+
+# A1E(Landroid/view/View;Landroid/view/View;I)V == v0.8 apply the overlay:
+# video LayoutParams.height = parent height with weight = 0, strip
+# translationY = -stripH + transparent backgrounds (strip + direct children,
+# pill two levels down keeps its rounded background). p0 = video, p1 = strip,
+# p2 = strip height.
+.method public static A1E(Landroid/view/View;Landroid/view/View;I)V
+    .locals 8
+
+    :try_start_0
+    # ---- video: height = parent height, weight = 0 ----
+    invoke-virtual {p0}, Landroid/view/View;->getParent()Landroid/view/ViewParent;
+    move-result-object v0
+    if-eqz v0, :apply_strip
+    instance-of v1, v0, Landroid/view/View;
+    if-eqz v1, :apply_strip
+    check-cast v0, Landroid/view/View;
+    invoke-virtual {v0}, Landroid/view/View;->getHeight()I
+    move-result v1
+
+    invoke-virtual {p0}, Landroid/view/View;->getLayoutParams()Landroid/view/ViewGroup$LayoutParams;
+    move-result-object v2
+    if-eqz v2, :apply_strip
+    iput v1, v2, Landroid/view/ViewGroup$LayoutParams;->height:I
+    instance-of v3, v2, Landroid/widget/LinearLayout$LayoutParams;
+    if-eqz v3, :weight_done
+    check-cast v2, Landroid/widget/LinearLayout$LayoutParams;
+    const/4 v4, 0x0
+    int-to-float v4, v4
+    iput v4, v2, Landroid/widget/LinearLayout$LayoutParams;->weight:F
+    :weight_done
+    invoke-virtual {p0}, Landroid/view/View;->requestLayout()V
+
+    :apply_strip
+    # ---- strip: float over the video bottom, background transparent ----
+    neg-int v4, p2
+    int-to-float v4, v4
+    invoke-virtual {p1, v4}, Landroid/view/View;->setTranslationY(F)V
+    const/4 v5, 0x0
+    invoke-virtual {p1, v5}, Landroid/view/View;->setBackground(Landroid/graphics/drawable/Drawable;)V
+
+    sget-object v6, LX/TTrueReelHelper;->A0Q:Ljava/util/ArrayList;
+    if-eqz v6, :kids_done
+    invoke-virtual {v6}, Ljava/util/ArrayList;->size()I
+    move-result v7
+    const/4 v3, 0x0
+    :kids_loop
+    if-ge v3, v7, :kids_done
+    invoke-virtual {v6, v3}, Ljava/util/ArrayList;->get(I)Ljava/lang/Object;
+    move-result-object v2
+    if-eqz v2, :kids_next
+    check-cast v2, Landroid/view/View;
+    invoke-virtual {v2, v5}, Landroid/view/View;->setBackground(Landroid/graphics/drawable/Drawable;)V
+    :kids_next
+    add-int/lit8 v3, v3, 0x1
+    goto :kids_loop
+    :kids_done
+    invoke-virtual {p1}, Landroid/view/View;->invalidate()V
+
+    # ---- telemetry ----
+    new-instance v0, Ljava/lang/StringBuilder;
+    invoke-direct {v0}, Ljava/lang/StringBuilder;-><init>()V
+    const-string v1, "v0.8 overlay: "
+    invoke-virtual {v0, v1}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    move-result-object v0
+    invoke-virtual {p1}, Landroid/lang/Object;->getClass()Ljava/lang/Class;
+    move-result-object v1
+    invoke-virtual {v1}, Ljava/lang/Class;->getName()Ljava/lang/String;
+    move-result-object v1
+    invoke-virtual {v0, v1}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    move-result-object v0
+    const-string v1, " ty="
+    invoke-virtual {v0, v1}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    move-result-object v0
+    neg-int v1, p2
+    invoke-virtual {v0, v1}, Ljava/lang/StringBuilder;->append(I)Ljava/lang/StringBuilder;
+    move-result-object v0
+    const-string v1, " (bg cleared, video full-height)"
+    invoke-virtual {v0, v1}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    move-result-object v0
+    invoke-virtual {v0}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
+    move-result-object v0
+    const-string v1, "InstaTrueReel"
+    invoke-static {v1, v0}, Landroid/util/Log;->e(Ljava/lang/String;Ljava/lang/String;)I
+    :try_end_0
+    .catch Ljava/lang/Throwable; {:try_start_0 .. :try_end_0} :catch_0
+
+    return-void
+
+    :catch_0
+    move-exception v0
+    const-string v1, "InstaTrueReel"
+    const-string v2, "v0.8 overlay: exception (recovered)"
     invoke-static {v1, v2, v0}, Landroid/util/Log;->e(Ljava/lang/String;Ljava/lang/String;Ljava/lang/Throwable;)I
     return-void
 .end method
