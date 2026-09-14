@@ -8,6 +8,8 @@ floating UI. Built entirely with GitHub Actions (decompile → smali patch → r
 
 | Release | APK | What |
 |---|---|---|
+| [v0.9.1-phase8.1](https://github.com/Skyro7777777/InstaTrueReel/releases/tag/v0.9.1-phase8.1) | `Instagram-v435.0.0.37.76-InstaTrueReel-signed.apk` | **THE ROTATION-FIGHT FIX**: the v0.9 field log proved Instagram actively fights landscape — `BaseFragmentActivity.A1p` re-asserts PORTRAIT on every config-change delivery via `0XU → 0XX → 6mW` (FixedOrientationCompat), and the rotation's config change flaps the clips fragment lifecycle, firing our restore mid-rotation. v0.9.1 gates `6mW.A00` (every app-side orientation set is swallowed while fullscreen is engaged), adds a 1500ms transient-rotation guard to the restore path, and auto-exits landscape when you swipe to a portrait reel (TikTok behavior) |
+| [v0.9.0-phase8](https://github.com/Skyro7777777/InstaTrueReel/releases/tag/v0.9.0-phase8) | `Instagram-v435.0.0.37.76-InstaTrueReel-signed.apk` | **TikTok-style horizontal fullscreen** — a "Full screen" pill appears under landscape videos in any Reels entry; tap it to rotate the app into an edge-to-edge landscape player (comment strip hidden, "x" exit top-left). Broken: the rotation was fought back by Instagram's portrait-lock (fixed in v0.9.1) |
 | [v0.8.0-phase7](https://github.com/Skyro7777777/InstaTrueReel/releases/tag/v0.8.0-phase7) | `Instagram-v435.0.0.37.76-InstaTrueReel-signed.apk` | **Strip-overlay transformation — THE comment-bar fix**: the v0.7 strip dump proved the comment bar is a sibling strip INSIDE the fragment root (below the fragment view, unreachable by ancestor walks); v0.8 extends the video child to full height (weight zeroed) and floats the strip over it with cleared backgrounds — TikTok-style fullscreen video with the pill floating at the bottom |
 | [v0.7.0-phase6](https://github.com/Skyro7777777/InstaTrueReel/releases/tag/v0.7.0-phase6) | `Instagram-v435.0.0.37.76-InstaTrueReel-signed.apk` | **Bottom-gap closure + strip telemetry**: attacks the last opaque area (comment-bar strip) with exact-height surgery on short containers; names any remaining culprit view in a tiny log |
 | [v0.6.0-phase5](https://github.com/Skyro7777777/InstaTrueReel/releases/tag/v0.6.0-phase5) | `Instagram-v435.0.0.37.76-InstaTrueReel-signed.apk` | **Chain liberation — STATUS BAR FIXED ON EVERY ENTRY POINT** (home-feed overlay, Watch History, Likes, Reels tab); full logcat diagnostics |
@@ -17,10 +19,15 @@ floating UI. Built entirely with GitHub Actions (decompile → smali patch → r
 | [v0.2.0-phase1.1](https://github.com/Skyro7777777/InstaTrueReel/releases/tag/v0.2.0-phase1.1) | `Instagram-v435.0.0.37.76-InstaTrueReel-signed.apk` | Window-chrome interceptors only (superseded) |
 | [v0.1.0-phase1](https://github.com/Skyro7777777/InstaTrueReel/releases/tag/v0.1.0-phase1) | `Instagram-v435.0.0.37.76-InstaTrueReel-signed.apk` | Initial attempt (superseded) |
 
-- **v0.9 (phase 8): TikTok-style horizontal fullscreen** — a "Full screen" pill appears under landscape videos in any Reels entry; tap it to rotate the whole app into an edge-to-edge landscape player (comment strip hidden, "x" exit top-left).
+- **v0.9.1 (phase 8.1): the rotation-fight fix** — tap "Full screen" and the app now STAYS landscape: Instagram's reactive portrait-lock (`FixedOrientationCompat`) is gated while fullscreen is engaged; the rotation's own lifecycle flap no longer tears the state down; swipe to a portrait reel and it returns to portrait automatically.
 
-> **Always grab the newest release (v0.8.0).** The status bar is transparent on every
-> entry point (the v0.6 win holds), and the v0.7 strip dump PROVED the last opaque area
+> **Always grab the newest release (v0.9.1).** The status bar is transparent on every
+> entry point (the v0.6 win holds), the comment bar is a floating transparent overlay
+> (the v0.8 win holds), and landscape reels now rotate and STAY rotated (the v0.9.1 win):
+> Instagram's reactive portrait-lock (`6mW` / FixedOrientationCompat — fired on every
+> configuration change AND at ModalActivity launch) is gated while the fullscreen is
+> engaged, the rotation's own fragment-lifecycle flap is guarded, and swiping to a
+> portrait reel auto-exits landscape. The v0.7 strip dump PROVED the last opaque area
 > — the **comment bar** — is a sibling strip INSIDE the fragment root LinearLayout,
 > below the fragment view where no ancestor-walk can ever reach it. v0.8 transforms
 > it: the weighted video child is extended to the full fragment-root height (its
