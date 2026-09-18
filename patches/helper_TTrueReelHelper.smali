@@ -2125,7 +2125,7 @@
     const-string v1, "v0.8 overlay: "
     invoke-virtual {v0, v1}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
     move-result-object v0
-    invoke-virtual {p1}, Landroid/lang/Object;->getClass()Ljava/lang/Class;
+    invoke-virtual {p1}, Landroid/view/View;->getClass()Ljava/lang/Class;
     move-result-object v1
     invoke-virtual {v1}, Ljava/lang/Class;->getName()Ljava/lang/String;
     move-result-object v1
